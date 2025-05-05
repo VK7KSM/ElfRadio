@@ -1,0 +1,25 @@
+[package]
+name = "elfradio_aux_client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+elfradio_config = { path = "../elfradio_config" } # Dependency for get_user_config_value
+elfradio_types = { path = "../elfradio_types" }   # Dependency for AiError, AuxServiceClient etc.
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+tokio = { version = "1", features = ["full"] } # If async methods are added later
+tracing = "0.1"
+serde = { version = "1.0", features = ["derive"] } # If needed for request/response structs later
+async-trait = "0.1" # If async methods are added to the client struct itself later 
+serde_json = "1.0" # Added for JSON parsing
+thiserror = "1.0"  # Added for error handling
+
+# Dependencies for Aliyun API Signature Calculation & Calls
+hmac = "0.12" # Use stable v0.12.1
+sha1 = "0.10"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+url = { version = "2.5", features = ["serde"] }
+# rand = "0.8" # Rand is not directly used in the provided aliyun.rs, but uuid depends on it. Added uuid instead.
+uuid = { version = "1.8", features = ["v4"] } # For SignatureNonce
+# hex = "0.4" # Hex is not directly used in the provided aliyun.rs. Omitted for now. 

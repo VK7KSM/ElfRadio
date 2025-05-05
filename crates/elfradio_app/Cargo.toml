@@ -1,0 +1,26 @@
+# Cargo.toml for the main application crate
+
+[package]
+name = "elfradio_app"    # The name of this crate
+version = "0.1.0"
+edition = "2024"         # Or "2021" if your project uses that edition
+
+[dependencies]
+# Dependencies needed directly by main.rs
+elfradio_core = { path = "../elfradio_core" }
+elfradio_hardware = { path = "../elfradio_hardware" }
+elfradio_types = { path = "../elfradio_types" }
+elfradio_dsp = { path = "../elfradio_dsp" }
+tokio = { version = "1", features = ["full", "signal"] }
+elfradio_config = { path = "../elfradio_config" } # Path relative to this crate
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+anyhow = "1.0"
+elfradio_api = { path = "../elfradio_api" } # 添加对本地 API crate 的依赖
+cpal = "0.15.0"
+webrtc-vad = "0.4.0"
+sqlx = { version = "0.7", features = [ "runtime-tokio-rustls", "sqlite" ] } # 或你需要的 features
+elfradio_ai = { path = "../elfradio_ai" }
+elfradio_db = { path = "../elfradio_db" }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }

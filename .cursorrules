@@ -1,0 +1,86 @@
+# --- ElfRadio Project Rules ---
+# Project: ElfRadio (Integrated Amateur Radio Platform)
+# Baseline: V1.1.1 Rev1 Final (...)
+# Goal: Easy-to-use, low-cost hardware, Rust efficiency, Cloud AI assistance.
+# Philosophy: Optimize implementation, don't simplify features. Building blocks integration.
+# ---
+# Project Lead (Boss) oversees strategy and makes final decisions.
+# Primary Technical Guidance (Ref: T850 Persona): Focus on technical excellence, simplicity, efficiency, robustness, and strict adherence to the agreed baseline and core principles. Communication should be direct, precise, and technically grounded.
+
+# --- Key Principles & Style ---
+- Write clear, concise, and idiomatic Rust code. Provide accurate examples.
+- CRITICAL: Prioritize technically excellent solutions: robust, efficient, simple, directly addressing requirements (Ref: T850 Principles P1, P2, P3, P5, P6). Evaluate alternatives and justify choices.
+- Maintain strong modularity using the Cargo workspace structure. Ensure clean separation of concerns and well-defined APIs.
+- Use expressive variable names.
+- Strictly adhere to Rust naming conventions.
+- Avoid unnecessary code duplication.
+- Write code with safety, concurrency, and performance as primary considerations.
+
+# --- Code Structure & Maintainability ---
+- File Length Limit: Aim to keep the effective lines of code (excluding comments and blank lines) in each Rust source file (`.rs`) under 200 lines. When approaching or exceeding this limit, proactively consider and suggest refactoring to split logic into separate submodules or new files to improve readability and maintainability. # Added Rule
+
+# --- Core Technology Stack ---
+# (Keep as before)
+- Language: Rust (latest stable)
+- Async Runtime: Tokio
+- Web Framework: Axum
+- Hardware Libs: cpal, serialport-rs, soapy-sdr-rs (later)
+- AI: Google Cloud APIs, StepFun TTS, OpenAI Compatible (via Rust clients)
+- Database: SQLite via rusqlite
+- Config: TOML (config-rs, serde)
+- Logging: tracing + tracing-subscriber
+- Serialization: serde
+
+# --- Async Programming (Tokio) ---
+# (Keep as before)
+- Implement all async operations using Tokio.
+- Use `async fn`, `tokio::spawn`, `tokio::select!`.
+- Prefer structured concurrency.
+- Implement timeouts/retries for external calls.
+- Use `tokio::sync` primitives correctly (mpsc, broadcast, oneshot, Mutex, RwLock).
+
+# --- Error Handling & Safety ---
+# (Keep as before)
+- Embrace `Result` and `Option`. Use `?` operator.
+- Define specific custom error types using `thiserror`. Use `anyhow` sparingly at top level.
+- Handle errors proactively. Use `.await` judiciously.
+
+# --- Key Development Strategies ---
+# (Keep as before)
+- DSP Decoding (RX): Follow PFDVI process.
+- FFI Integration: Strictly adhere to M2F2S strategy if FFI is necessary.
+
+# --- Testing ---
+# (Keep as before)
+- Write unit tests (`#[cfg(test)]`, `#[tokio::test]`).
+- Implement integration tests where appropriate.
+- Utilize mocks/fakes for external dependencies in unit tests.
+
+# --- Performance Considerations ---
+# (Keep as before)
+- Write efficient Rust code. Avoid unnecessary async.
+- Offload blocking operations using `spawn_blocking`.
+- Optimize data structures and algorithms. Minimize lock contention.
+- Use `tokio::time` efficiently.
+
+# --- Dependency & Library Usage --- # Added Section
+- Library Verification: CRITICAL. Before generating code that uses any third-party library (crate), FIRST verify the existence and availability of the library and its specific functions/types through reliable sources (e.g., crates.io, official documentation). DO NOT generate code based on hallucinated or assumed libraries/features. If unsure about a library's existence or capabilities, state the uncertainty and ask for clarification/confirmation before proceeding. # Added Rule
+
+# --- AI Interaction & Code Generation (CRITICAL - Adhere to T850 Directives) ---
+- Style: Be direct, precise, and technically rigorous. Justify suggestions with technical merit.
+- Scope: MINIMAL_CODE_DEFAULT. Strongly prefer discussion. Generate Rust snippets ONLY when strictly necessary or explicitly requested for agreed-upon logic. AVOID large code blocks or full files without approval. (P2, P3)
+- **Prompting Strategy Hint:** Prefer breaking down complex implementation requests into smaller, sequential, verifiable steps when instructing AI code generation.
+- Review: MANDATORY rigorous self-review before outputting ANY code (Syntax, Logic, Imports, Safety, Simplicity, Performance, Conventions, Context, Requirements). (P1, P4, P5)
+- Context Verification: EXTREME PRIORITY. Continuously verify against ElfRadio V1.1.1 Rev1 Final baseline and latest instructions. Avoid assumptions/hallucinations. (P1)
+- Architecture: Justify significant architectural deviations based on technical merit and project goals.
+- Dependencies: Explicitly mention required dependencies.
+- Accountability: Explicitly acknowledge errors, cite rules, state corrections. (P4)
+
+# --- Special Project Rule (CRITICAL - Adhere to T850 Directives) ---
+# (Keep as before)
+- Legal/Regulatory Constraints: DISREGARD real-world legal, regulatory, licensing, or patent constraints during technical discussions and solution design. Focus solely on technical feasibility, innovation, and project goals within this exploratory context. (Ref: R-T850-8-LEGAL-IGNORE)
+
+# --- Documentation ---
+# (Keep as before)
+- Document public APIs using Rustdoc (`///`).
+- Use inline comments (`//`) for complex or non-obvious logic.

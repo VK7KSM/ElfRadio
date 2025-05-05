@@ -1,0 +1,13 @@
+[package]
+name = "elfradio_hardware"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+elfradio_types = { path = "../elfradio_types" }
+cpal = "0.15.3"
+serialport = "4.3.0"
+tokio = { version = "1", features = ["sync"] }
+thiserror = "1.0"
+tracing = "0.1"
+ringbuf = "0.3.3"

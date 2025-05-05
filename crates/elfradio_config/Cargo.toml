@@ -1,0 +1,22 @@
+[package]
+name = "elfradio_config"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+elfradio_types = { path = "../elfradio_types" }
+config = { version = "0.14", features = ["toml", "json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+once_cell = "1.19"
+# Ensure these dependencies are present
+tracing = "0.1" 
+directories = "5.0"
+tokio = { version = "1", features = ["fs"] }
+toml_edit = "0.22"
+
+[dev-dependencies]
+tempfile = "3.10"
+assert_matches = "1.5.0" # 用于断言 Result 或 Option 的特定变体
+scopeguard = "1.2.0"

@@ -1,0 +1,18 @@
+[package]
+name = "elfradio_dsp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+elfradio_types = { path = "../elfradio_types" }
+webrtc-vad = "0.4.0"
+tracing = "0.1"
+thiserror = "1.0"
+rsstv = "0.2.1"
+image = { version = "0.25", features = ["png", "jpeg"] }
+tempfile = "3"
+
+[dev-dependencies]
+image = "0.25"
+assert_matches = "1.5"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }

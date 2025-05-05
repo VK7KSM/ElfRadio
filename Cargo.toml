@@ -1,0 +1,29 @@
+# This is the root Cargo.toml for the ElfRadio workspace.
+
+# Defines the workspace and its members.
+[workspace]
+resolver = "2" # Use the version 2 feature resolver
+members = [
+    "crates/elfradio_api",
+    "crates/elfradio_ai",
+    "crates/elfradio_config",
+    "crates/elfradio_core",
+    "crates/elfradio_db",
+    "crates/elfradio_dsp",
+    "crates/elfradio_hardware",
+    "crates/elfradio_types",
+    "crates/elfradio_app",
+    # Add other crates here if they exist, e.g., "crates/elfradio_ui"
+]
+
+# Optional: Define default members if you want `cargo run` without `-p`
+# default-members = ["elfradio"] # Refers to the [[bin]] target below
+
+# Optional: Define shared dependencies for the workspace
+# [workspace.dependencies]
+# some_common_crate = "1.2"
+
+# Dependencies for the main binary target defined in src/main.rs
+# These are NOT inherited by workspace members unless they explicitly depend on them.
+
+# Defines the main executable binary for the ElfRadio application.

@@ -1,0 +1,23 @@
+[package]
+name = "elfradio_api"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = { version = "0.7", features = ["ws", "macros"] }
+tokio = { version = "1", features = ["full", "fs", "rt", "macros", "process", "io-util"] }
+tower-http = { version = "0.5", features = ["cors"] }
+serde = "1.0"
+serde_json = "1.0"
+elfradio_types = { path = "../elfradio_types" }
+tracing = "0.1"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+anyhow = "1.0"
+uuid = { version = "1.7", features = ["v4"] }
+zip = "0.6"
+thiserror = "1.0"
+elfradio_core = { path = "../elfradio_core" }
+chrono = { version = "0.4", features = ["serde"] }
+elfradio_db = { path = "../elfradio_db" }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "uuid", "chrono", "macros", "json"] }
+elfradio_config = { path = "../elfradio_config" }
