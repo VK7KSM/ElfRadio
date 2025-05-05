@@ -4,20 +4,20 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-axum = { version = "0.7", features = ["ws", "macros"] }
-tokio = { version = "1", features = ["full", "fs", "rt", "macros", "process", "io-util"] }
-tower-http = { version = "0.5", features = ["cors"] }
-serde = "1.0"
-serde_json = "1.0"
-elfradio_types = { path = "../elfradio_types" }
-tracing = "0.1"
-futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-anyhow = "1.0"
-uuid = { version = "1.7", features = ["v4"] }
-zip = "0.6"
-thiserror = "1.0"
-elfradio_core = { path = "../elfradio_core" }
-chrono = { version = "0.4", features = ["serde"] }
-elfradio_db = { path = "../elfradio_db" }
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "uuid", "chrono", "macros", "json"] }
-elfradio_config = { path = "../elfradio_config" }
+axum = { workspace = true, features = ["ws", "macros", "json"] }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+elfradio_types = { workspace = true }
+tracing = { workspace = true }
+futures-util = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+zip = { workspace = true }
+thiserror = { workspace = true }
+elfradio_core = { workspace = true }
+chrono = { workspace = true }
+elfradio_db = { workspace = true }
+sqlx = { workspace = true }
+elfradio_config = { workspace = true }

@@ -64,7 +64,7 @@ pub async fn run_server(
                 match serde_json::to_string(&ws_message) {
                     Ok(json_string) => {
                         debug!(num_clients = clients_guard.len(), "Broadcasting structured log message (JSON)");
-                        let ws_msg = Message::Text(json_string); // Send JSON string
+                        let ws_msg = axum::extract::ws::Message::Text(json_string.into()); // Add .into()
 
                 // Iterate over all connected client senders
                 for tx in clients_guard.values() {
@@ -333,9 +333,9 @@ async fn export_task_data_handler(
             let mut zip_writer = ZipWriter::new(cursor);
 
             // Use Stored for no compression, Deflated for compression
-            let options = FileOptions::default()
-                .compression_method(CompressionMethod::Deflated) // Use compression
-                .unix_permissions(0o644); // Set basic permissions
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(CompressionMethod::Deflated)
+                .compression_level(Some(6)); // Optional: Set compression level (0-9)
 
             // Add the events.jsonl file
             // Map IO errors within the closure to ZipError::Io

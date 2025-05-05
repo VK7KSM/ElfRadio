@@ -32,10 +32,14 @@ pub struct OpenAICompatibleClient {
 /// Helper function to map OpenAIError to AiError
 fn map_openai_error(err: OpenAIError) -> AiError {
     tracing::warn!("Mapping OpenAI Error: {:?}", err); // Add tracing
-        match err {
-            OpenAIError::ApiError(api_err) => {
-            let status_code = api_err.code.as_ref().map_or(0, |c| c.as_u64().unwrap_or(0)) as u16;
-            AiError::ApiError { // Use struct variant from elfradio_types::AiError
+    match err {
+        OpenAIError::ApiError(api_err) => {
+            // 修复：尝试将 code 解析为 u16，如果无法解析则使用默认值 0
+            let status_code: u16 = api_err.code.as_ref()
+                .and_then(|s| s.parse::<u16>().ok()) // 尝试将字符串解析为 u16
+                .unwrap_or(0); // 如果 code 为 None 或解析失败，则默认为 0
+            
+            AiError::ApiError { // 使用 elfradio_types::AiError 中的结构体变体
                 status: status_code,
                 message: format!("OpenAI API error: Type={:?}, Code={:?}, Message={}, Param={:?}",
                     api_err.r#type, api_err.code, api_err.message, api_err.param),
@@ -43,7 +47,7 @@ fn map_openai_error(err: OpenAIError) -> AiError {
         }
         // Note: OpenAIError does not seem to have a distinct RateLimit variant in async-openai 0.20.
         // Rate limit errors typically come as ApiError with status 429.
-        OpenAIError::Reqwest(e) => AiError::Network(format!("HTTP request failed: {}", e)), // Use AiError::Network
+        OpenAIError::Reqwest(e) => AiError::RequestError(format!("HTTP request failed: {}", e)), // Changed Network to RequestError
         // Map other specific OpenAIError variants if necessary
         OpenAIError::StreamError(s) => AiError::ResponseParseError(format!("Stream error: {}", s)), // Map to ResponseParseError
         OpenAIError::FileSaveError(s) | OpenAIError::FileReadError(s) => AiError::ClientError(format!("File IO error: {}", s)), // Map File IO to ClientError
@@ -124,19 +128,19 @@ impl AiClient for OpenAICompatibleClient {
                         ChatCompletionRequestSystemMessageArgs::default()
                             .content(msg.content)
                             .build()
-                            .map_err(|e| AiError::ClientError(format!("Failed to build system message: {}", e)))?,
+                            .map_err(|e| AiError::ClientError(format!("Failed to build system message: {}", e)))?
                     )),
                     "user" => Ok(ChatCompletionRequestMessage::User(
                         ChatCompletionRequestUserMessageArgs::default()
                             .content(msg.content)
                             .build()
-                            .map_err(|e| AiError::ClientError(format!("Failed to build user message: {}", e)))?,
+                            .map_err(|e| AiError::ClientError(format!("Failed to build user message: {}", e)))?
                     )),
                     "assistant" => Ok(ChatCompletionRequestMessage::Assistant(
                         ChatCompletionRequestAssistantMessageArgs::default()
-                            .content(msg.content) // Content should be Some for requests
+                            .content(msg.content)
                             .build()
-                            .map_err(|e| AiError::ClientError(format!("Failed to build assistant message: {}", e)))?,
+                            .map_err(|e| AiError::ClientError(format!("Failed to build assistant message: {}", e)))?
                     )),
                     unknown_role => {
                          warn!("Unknown role '{}' encountered, treating as user.", unknown_role);
@@ -145,10 +149,8 @@ impl AiClient for OpenAICompatibleClient {
                              ChatCompletionRequestUserMessageArgs::default()
                                  .content(msg.content)
                                  .build()
-                                 .map_err(|e| AiError::ClientError(format!("Failed to build default user message: {}", e)))?,
+                                 .map_err(|e| AiError::ClientError(format!("Failed to build default user message: {}", e)))?
                          ))
-                        // Alternative: Return an error for unknown roles
-                        // Err(AiError::ClientError(format!("Unknown role: {}", unknown_role)))
                     }
                 }
             })

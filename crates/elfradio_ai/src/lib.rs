@@ -3,15 +3,16 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use elfradio_types::AiError;
+use elfradio_types::AuxServiceClient; // 添加 AuxServiceClient 导入
 
 // Declare the new submodules
 mod openai_compatible;
-// DELETE: mod google; // Added google module
+mod google; // 恢复 google 模块声明（移除 DELETE 注释）
 pub mod stepfun; // Add this line
 
 // Publicly export the client structs from the submodules
 pub use openai_compatible::OpenAICompatibleClient;
-// DELETE: pub use google::GoogleAiClient; // Added GoogleAiClient export
+pub use google::GoogleAiClient; // 恢复 GoogleAiClient 导出（移除 DELETE 注释）
 pub use stepfun::StepFunTtsClient; // Optionally re-export
 
 /// 辅助函数：将 serde_json::Error 转换为 AiError

@@ -4,31 +4,31 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-elfradio_dsp = { path = "../elfradio_dsp" }
-elfradio_types = { path = "../elfradio_types" }
-tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "time", "fs"] }
-tracing = "0.1"
+elfradio_dsp = { workspace = true }
+elfradio_types = { workspace = true }
+tokio = { workspace = true, features = ["sync", "macros", "rt-multi-thread", "time", "fs"] }
+tracing = { workspace = true }
 webrtc-vad = "0.4.0"
-elfradio_ai = { path = "../elfradio_ai" }
-elfradio_config = { path = "../elfradio_config" }
-thiserror = "1"
-hound = "3.5"
-uuid = { version = "1", features = ["v4"] }
-elfradio_hardware = { path = "../elfradio_hardware" }
-serde_json = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
-anyhow = "1.0.98"
-sqlx = { version = "0.7", features = ["sqlite"] }
+elfradio_ai = { workspace = true }
+elfradio_config = { workspace = true }
+thiserror = { workspace = true }
+hound = "3.5.1"
+uuid = { workspace = true }
+elfradio_hardware = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+sqlx = { workspace = true }
 cpal = "0.15.3"
-elfradio_db = { path = "../elfradio_db" }
+elfradio_db = { workspace = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
-elfradio_types = { path = "../elfradio_types" }
-elfradio_ai = { path = "../elfradio_ai" }
-sqlx = { version = "0.7", features = ["sqlite"] }
-uuid = { version = "1", features = ["v4"] }
-chrono = "0.4"
+tokio = { workspace = true }
+elfradio_types = { workspace = true }
+elfradio_ai = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
 assert_matches = "1.5"
-async-trait = "0.1"
-tempfile = "3"
+async-trait = { workspace = true }
+tempfile = "3.19.1"

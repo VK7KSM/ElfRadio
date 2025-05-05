@@ -11,6 +11,7 @@ use std::str::FromStr;
 use thiserror::Error;
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
+use async_trait::async_trait;
 
 // 1. TaskStatus 枚举
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -128,6 +129,15 @@ pub enum AiProvider {
     // Add other specific providers later if needed
 }
 
+/// Defines the available auxiliary service providers.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum AuxServiceProvider {
+    Google,
+    Aliyun,
+    Baidu, // Placeholder for future
+    // Add others as needed
+}
+
 /// Configuration specific to Google AI services (Gemini).
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct GoogleConfig {
@@ -145,13 +155,35 @@ pub struct GoogleConfig {
     pub tts_voice: Option<String>, // Made optional, can use a default
 }
 
-/// Configuration specific to StepFun TTS services.
+/// Configuration specific to Aliyun auxiliary services.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AliyunAuxCredentials {
+    // These fields are primarily for config structure definition.
+    // The actual values will be read by the client using get_user_config_value.
+    // Mark them as optional in the config file.
+    #[serde(default)]
+    pub access_key_id: Option<String>,
+    #[serde(default)]
+    pub access_key_secret: Option<String>,
+    // Add region_id etc. if needed by the client later
+}
+
+/// Configuration specific to the StepFun TTS service.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct StepFunTtsConfig {
-    /// StepFun API Key.
+    /// API Key for StepFun TTS.
+    #[serde(default)] // Make optional in TOML, read via get_user_config_value later if needed
     pub api_key: Option<String>,
-    // No user voice selection needed per final decision
-    // pub preferred_voice_id: Option<String>, // Removed
+    // Add other StepFun specific fields if any (e.g., preferred_voice)
+}
+
+/// Configuration specific to Baidu auxiliary services.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct BaiduAuxConfig {
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub secret_key: Option<String>,
 }
 
 /// Configuration for OpenAI-compatible APIs (like StepFun Chat, DeepSeek Chat).
@@ -166,7 +198,6 @@ pub struct OpenAICompatibleConfig {
     /// Preferred model identifier for this service.
     pub preferred_model: Option<String>, // e.g., "step-1v-8k", "deepseek-chat"
 }
-
 
 /// Main AI configuration structure, supporting multiple providers.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -203,6 +234,26 @@ pub struct AiConfig {
     // Common TTS parameters (voice selection is handled by provider config or defaults)
     // pub default_tts_speed: Option<f32>, // Example: Add if needed later
     // pub default_tts_volume: Option<f32>, // Example: Add if needed later
+}
+
+/// Main auxiliary service configuration structure, supporting multiple providers.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AuxServiceConfig {
+    /// Which provider to use for STT, TTS, and Translate.
+    #[serde(default)] // Make provider optional in TOML, default handled by factory
+    pub provider: Option<AuxServiceProvider>,
+
+    /// Google specific settings placeholder (key read directly by client).
+    #[serde(default)]
+    pub google: GoogleConfig, // Reuse GoogleConfig for structure
+
+    /// Aliyun specific settings placeholder.
+    #[serde(default)]
+    pub aliyun: AliyunAuxCredentials,
+
+    /// Baidu specific settings placeholder.
+    #[serde(default)]
+    pub baidu: BaiduAuxConfig,
 }
 
 // --- End New AI Configuration Structs ---
@@ -284,6 +335,9 @@ pub struct Config {
     pub hardware: HardwareConfig,
     /// AI service settings. **(Updated)**
     pub ai_settings: AiConfig,
+    /// Auxiliary service settings for translation, TTS, STT.
+    #[serde(default)]
+    pub aux_service_settings: AuxServiceConfig,
     /// Timing settings.
     pub timing: TimingConfig,
     /// Radio etiquette settings.
@@ -294,7 +348,6 @@ pub struct Config {
     pub signal_tone: SignalToneConfig,
     /// SSTV settings.
     pub sstv_settings: SstvConfig,
-    pub stepfun_tts: Option<StepFunTtsConfig>,
     /// Network configuration
     pub network: Option<NetworkConfig>,
 }
@@ -328,6 +381,8 @@ impl Default for Config {
                 max_tokens: Some(1024), // 示例：保留默认值
                 ..Default::default() // 使用 AiConfig 的其他默认值
             },
+            // Initialize new aux service settings
+            aux_service_settings: AuxServiceConfig::default(),
             timing: TimingConfig {
                 ptt_pre_delay_ms: 100,
                 ptt_post_delay_ms: 100,
@@ -352,7 +407,6 @@ impl Default for Config {
             sstv_settings: SstvConfig {
                 mode: "Martin M1".to_string(), // Default SSTV mode
             },
-            stepfun_tts: None, // 确保这个也与 ai_settings.stepfun_tts 一致
             network: Some(NetworkConfig {
                 listen_address: Some("0.0.0.0".to_string()),
                 listen_port: Some(5900),
@@ -444,16 +498,12 @@ pub enum WebSocketMessage {
 /// Shared Error type for AI operations across elfradio crates.
 #[derive(Error, Debug, Clone)] // Added Clone derive
 pub enum AiError {
-    #[error("Network error: {0}")]
-    Network(String),
-    #[error("API error: {0}")]
-    Api(String),
     #[error("Configuration error: {0}")]
-    Config(String),
+    Config(String), // For config read/parse errors
     #[error("Audio processing error: {0}")]
     Audio(String),
     #[error("Unknown AI error")]
-    Unknown,
+    Unknown, // Keep for truly unknown cases
     #[error("AI Client Error: {0}")]
     ClientError(String), // General client-side setup/config errors
     #[error("API Error (Status: {status}): {message}")]
@@ -470,7 +520,6 @@ pub enum AiError {
     InvalidInput(String),
     #[error("AI provider not specified in configuration")]
     ProviderNotSpecified,
-    // --- Add AuxClient specific errors here if needed, or keep them separate ---
     // Example, mirroring elfradio_aux_client::AiError:
     #[error("Authentication Error: {0}")]
     AuthenticationError(String),
@@ -680,4 +729,44 @@ impl From<&Config> for FrontendConfig {
             // Omit sensitive structs like `security` unless specific fields are mapped
         }
     }
+}
+
+/// Defines the interface for auxiliary services like translation, TTS, and STT.
+#[async_trait]
+pub trait AuxServiceClient: Send + Sync {
+    /// Translates text from one language to another.
+    ///
+    /// # Arguments
+    /// * `text` - The text to translate.
+    /// * `target_language` - The language code to translate to (e.g., "en", "zh").
+    /// * `source_language` - Optional source language code. If None, the service will attempt to detect it.
+    ///
+    /// # Returns
+    /// A `Result` containing the translated text as a `String` on success,
+    /// or an `AiError` on failure.
+    async fn translate(&self, text: &str, target_language: &str, source_language: Option<&str>) -> Result<String, AiError>;
+
+    /// Converts text to speech audio.
+    ///
+    /// # Arguments
+    /// * `text` - The text to synthesize.
+    /// * `language_code` - The language code (e.g., "en-US", "zh-CN").
+    /// * `voice_name` - Optional voice identifier. If None, a default voice will be used.
+    ///
+    /// # Returns
+    /// A `Result` containing the raw audio data as `Vec<u8>` on success,
+    /// or an `AiError` on failure.
+    async fn text_to_speech(&self, text: &str, language_code: &str, voice_name: Option<&str>) -> Result<Vec<u8>, AiError>;
+
+    /// Converts speech audio to text.
+    ///
+    /// # Arguments
+    /// * `audio_data` - Raw audio data bytes.
+    /// * `sample_rate_hertz` - The sample rate of the audio in Hz (e.g., 16000, 48000).
+    /// * `language_code` - The language code (e.g., "en-US", "zh-CN").
+    ///
+    /// # Returns
+    /// A `Result` containing the transcribed text as a `String` on success,
+    /// or an `AiError` on failure.
+    async fn speech_to_text(&self, audio_data: &[u8], sample_rate_hertz: u32, language_code: &str) -> Result<String, AiError>;
 }

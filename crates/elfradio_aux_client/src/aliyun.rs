@@ -1,7 +1,7 @@
 //! Implementation of the AuxServiceClient trait for Aliyun services.
 
-use elfradio_types::{AiError, AliyunAuxConfig, AuxServiceClient}; // Import config, error, and trait
-use elfradio_config::get_user_config_value;
+use elfradio_types::{AiError, AliyunAuxCredentials, AuxServiceClient}; // Use correct type AliyunAuxCredentials
+use elfradio_config::{get_user_config_value, ConfigError}; // Import ConfigError
 use reqwest::{Client as ReqwestClient, header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_TYPE, DATE}}; // Add header imports
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -35,7 +35,8 @@ impl AliyunAuxClient {
         let key_path_secret = "aux_service_settings.aliyun.access_key_secret";
 
         // Read Access Key ID from user config
-        let access_key_id = get_user_config_value::<String>(key_path_id)?
+        let access_key_id = get_user_config_value::<String>(key_path_id)
+            .map_err(|e| AiError::Config(format!("Failed to read Aliyun Access Key ID: {}", e)))? // Map error
             .filter(|key| !key.is_empty()) // Ensure not empty
             .ok_or_else(|| {
                 error!("Aliyun Access Key ID not found or empty in user configuration at key '{}'.", key_path_id);
@@ -43,7 +44,8 @@ impl AliyunAuxClient {
             })?;
 
         // Read Access Key Secret from user config
-        let access_key_secret = get_user_config_value::<String>(key_path_secret)?
+        let access_key_secret = get_user_config_value::<String>(key_path_secret)
+            .map_err(|e| AiError::Config(format!("Failed to read Aliyun Access Key Secret: {}", e)))? // Map error
             .filter(|secret| !secret.is_empty()) // Ensure not empty
             .ok_or_else(|| {
                 error!("Aliyun Access Key Secret not found or empty in user configuration at key '{}'.", key_path_secret);
@@ -135,6 +137,39 @@ fn percent_encode(input: &str) -> String {
         // Let's double-check '+' encoding if using GET later (should be %2B, not space).
 }
 
+// --- 添加开始: Aliyun Translate API 请求/响应结构体 ---
+
+/// Represents the JSON body for the Aliyun TranslateGeneral API request.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "PascalCase")] // Aliyun API uses PascalCase
+struct AliyunTranslateRequest<'a> {
+    format_type: &'static str, // Typically "text"
+    source_language: &'a str,
+    target_language: &'a str,
+    source_text: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scene: Option<&'a str>, // e.g., "general"
+}
+
+/// Represents the nested 'Data' part of a successful Aliyun Translate response.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+struct AliyunTranslateResponseData {
+    translated: String,
+    // Add other fields from 'Data' if needed, e.g., DetectedLanguage, WordCount
+}
+
+/// Represents the overall structure of the Aliyun Translate API response.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+struct AliyunTranslateResponse {
+    request_id: String,
+    data: Option<AliyunTranslateResponseData>, // Present on success
+    code: Option<String>,     // Present on success or failure
+    message: Option<String>, // Present on success or failure
+}
+// --- 添加结束 ---
+
 // Implement the trait with placeholder methods
 #[async_trait]
 impl AuxServiceClient for AliyunAuxClient {
@@ -174,7 +209,7 @@ impl AuxServiceClient for AliyunAuxClient {
         params_for_sig.insert("Action".to_string(), action.to_string());
 
         // 3. Calculate Signature using parameters intended for query string
-        let signature = self.calculate_aliyun_signature(method, api_path, ¶ms_for_sig)?;
+        let signature = self.calculate_aliyun_signature(method, api_path, &params_for_sig)?;
 
         // 4. Build Final Query String with Signature
         params_for_sig.insert("Signature".to_string(), signature); // Add signature to the map
@@ -196,7 +231,8 @@ impl AuxServiceClient for AliyunAuxClient {
             .await
             .map_err(|e| {
                  error!("Aliyun network request failed: {}", e);
-                 AiError::NetworkError(format!("Aliyun network request failed: {}", e))
+                 // Use RequestError instead of NetworkError
+                 AiError::RequestError(format!("Aliyun network request failed: {}", e))
             })?;
 
         let status = response.status();
@@ -220,45 +256,54 @@ impl AuxServiceClient for AliyunAuxClient {
             }
         };
 
-        // Check for explicit API errors in the response body
-        // Aliyun might return HTTP 200 but have an error code in the body
-        if let Some(code) = &response_body.code {
-             // Based on docs, a successful response might not have a 'Code' field, or it might be specific like "Success.NotUpdate"
-             // Let's assume any presence of 'Code' that isn't clearly success indicates an issue, or if HTTP status wasn't 200.
-             // A more robust check would compare against known success codes.
-             if !status.is_success() || (code != "200" && !code.starts_with("Success")) { // Example check, VERIFY success codes
-                 let message = response_body.message.as_deref().unwrap_or("Unknown Aliyun API error");
-                 warn!("Aliyun Translate API returned error. Code: {}, Message: {}", code, message);
-                 // Return ApiError using the parsed code/message
-                 return Err(AiError::ApiError { status: status.as_u16(), message: format!("Code: {}, Message: {}", code, message) });
+        // Check for API-level errors indicated in the response body
+        if let Some(code) = response_body.code {
+             if code != "200" { // Assuming "200" is the success code for Aliyun Translate
+                 let message = response_body.message.unwrap_or_else(|| "No error message provided.".to_string());
+                 error!("Aliyun API Error: Code={}, Message={}", code, message);
+                 // Map to AiError::ApiError
+                 return Err(AiError::ApiError {
+                     status: status.as_u16(), // Keep HTTP status if available
+                     message: format!("Aliyun API Error (Code: {}): {}", code, message),
+                 });
              }
-        } else if !status.is_success() {
-            // Handle non-success HTTP status when Code field is missing
-             warn!("Aliyun Translate API HTTP error. Status: {}, Body: {}", status, response_text);
-             let message = response_body.message.unwrap_or(response_text); // Fallback
-             return Err(AiError::ApiError { status: status.as_u16(), message });
         }
 
-
-        // Extract translated text from successful response data
-        if let Some(data) = response_body.data {
-            debug!("Aliyun Translation successful. RequestId: {}", response_body.request_id);
-            Ok(data.translated)
+        // If we have a 'Data' field and HTTP status is success, extract translation
+        if status.is_success() {
+            if let Some(data) = response_body.data {
+                debug!("Aliyun translation successful (RequestId: {}).", response_body.request_id);
+                Ok(data.translated)
+            } else {
+                // Success status but no data field - treat as an API error or unexpected response
+                error!("Aliyun API returned success status ({}) but no 'Data' field in response. RequestId: {}", status, response_body.request_id);
+                Err(AiError::ApiError {
+                    status: status.as_u16(),
+                    message: format!("Aliyun API Success status ({}) but no translation data received (RequestId: {}).", status, response_body.request_id),
+                })
+            }
         } else {
-            // This case might happen if HTTP 200 is returned but 'Data' is missing
-            let err_msg = format!("'Data' field missing in successful Aliyun response (HTTP {}). RequestId: {}. Body: {}", status, response_body.request_id, response_text);
-            error!("{}", err_msg);
-            Err(AiError::ResponseParseError(err_msg))
+             // Handle non-success HTTP status codes even if code/message wasn't in JSON
+             let message = response_body.message.unwrap_or_else(|| response_text); // Use body text if no message field
+             error!("Aliyun HTTP Error: Status={}, Body={}", status, message);
+             Err(AiError::ApiError {
+                 status: status.as_u16(),
+                 message: format!("Aliyun HTTP Error {}: {}", status.as_u16(), message),
+             })
         }
     }
 
+    /// Converts text to speech audio (Placeholder).
     async fn text_to_speech(&self, _text: &str, _language_code: &str, _voice_name: Option<&str>) -> Result<Vec<u8>, AiError> {
-        warn!("Aliyun text_to_speech called but not implemented.");
-        Err(AiError::NotImplemented("Aliyun TTS not yet implemented".to_string()))
+        warn!("AliyunAuxClient::text_to_speech is not implemented.");
+        // Use NotSupported instead of NotImplemented
+        Err(AiError::NotSupported("Aliyun TTS not yet implemented".to_string()))
     }
 
+    /// Converts speech audio to text (Placeholder).
     async fn speech_to_text(&self, _audio_data: &[u8], _sample_rate_hertz: u32, _language_code: &str) -> Result<String, AiError> {
-        warn!("Aliyun speech_to_text called but not implemented.");
-        Err(AiError::NotImplemented("Aliyun STT not yet implemented".to_string()))
+        warn!("AliyunAuxClient::speech_to_text is not implemented.");
+        // Use NotSupported instead of NotImplemented
+        Err(AiError::NotSupported("Aliyun STT not yet implemented".to_string()))
     }
 } 

@@ -3,10 +3,11 @@ use elfradio_config::ConfigError as ElfConfigError; // Import config error type
 use reqwest::Client as ReqwestClient; // Assuming reqwest is used
 use thiserror::Error;
 use async_trait::async_trait; // For async trait methods
-use tracing::{debug, error, warn, trace};
+use tracing::{debug, error, info, warn, trace};
 use serde::{Deserialize, Serialize}; // Added for request/response structs
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use std::sync::Arc; // 添加 Arc 导入
 
 // Correct import for the trait
 use elfradio_types::AuxServiceClient;
@@ -203,8 +204,8 @@ impl AuxServiceClient for GoogleAuxClient {
             .await
             .map_err(|e| {
                 error!("Network error during Google Translate request: {}", e);
-                // Use NetworkError variant from elfradio_types::AiError
-                AiError::Network(e.to_string()) // Map reqwest error
+                // Use RequestError variant from elfradio_types::AiError
+                AiError::RequestError(e.to_string()) // Changed Network to RequestError
             })?;
 
         let status = response.status();
@@ -272,25 +273,18 @@ impl AuxServiceClient for GoogleAuxClient {
         debug!("Sending TTS request to Google API v1...");
         trace!("TTS Request Payload: {:?}", request_payload); // Be careful logging sensitive text
 
-        // Build headers, including the API Key
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        // Use X-Goog-Api-Key header for authentication
-        match HeaderValue::from_str(api_key) {
-             Ok(key_header) => { headers.insert("X-Goog-Api-Key", key_header); }
-             Err(_) => return Err(AiError::AuthenticationError("Invalid characters in Google API Key".to_string())),
-        }
-
         let response = self.http_client
             .post(url)
-            .headers(headers) // Add the headers
+            .header(CONTENT_TYPE, "application/json")
+            // Add the API key as a query parameter
+            .query(&[("key", &self.api_key)])
             .json(&request_payload)
             .send()
             .await
             .map_err(|e| {
                 error!("Network error during Google TTS request: {}", e);
-                // Use NetworkError variant
-                AiError::Network(e.to_string())
+                // Use RequestError variant from elfradio_types::AiError
+                AiError::RequestError(e.to_string()) // Changed NetworkError to RequestError
             })?;
 
         let status = response.status();
@@ -355,28 +349,23 @@ impl AuxServiceClient for GoogleAuxClient {
 
         // 3. Define URL and Headers
         let url = "https://speech.googleapis.com/v1/speech:recognize";
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        match HeaderValue::from_str(api_key) {
-             Ok(key_header) => { headers.insert("X-Goog-Api-Key", key_header); }
-             Err(_) => return Err(AiError::AuthenticationError("Invalid characters in Google API Key".to_string())),
-        }
 
-        debug!("Sending STT request to Google API v1...");
-        // Avoid logging the full base64 audio content in trace for large files
-        trace!("STT Request Payload (Audio Content Omitted): Config: {:?}", request_payload.config);
+        debug!("Sending STT request to Google API...");
+        // Avoid tracing the entire audio data, log its length instead
+        trace!("STT Request Payload: config={:?}, audio_len={}", request_payload.config, request_payload.audio.content.len());
 
-        // 4. Send Request
         let response = self.http_client
             .post(url)
-            .headers(headers)
+            .header(CONTENT_TYPE, "application/json")
+            // Add the API key as a query parameter
+            .query(&[("key", &self.api_key)])
             .json(&request_payload)
             .send()
             .await
             .map_err(|e| {
                 error!("Network error during Google STT request: {}", e);
-                // Use NetworkError variant
-                AiError::Network(e.to_string())
+                // Use RequestError variant from elfradio_types::AiError
+                AiError::RequestError(e.to_string()) // Changed NetworkError to RequestError
             })?;
 
         let status = response.status();

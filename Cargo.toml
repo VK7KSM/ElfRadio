@@ -13,17 +13,73 @@ members = [
     "crates/elfradio_hardware",
     "crates/elfradio_types",
     "crates/elfradio_app",
+    "crates/elfradio_aux_client",
     # Add other crates here if they exist, e.g., "crates/elfradio_ui"
 ]
 
 # Optional: Define default members if you want `cargo run` without `-p`
 # default-members = ["elfradio"] # Refers to the [[bin]] target below
 
-# Optional: Define shared dependencies for the workspace
-# [workspace.dependencies]
-# some_common_crate = "1.2"
+# --- 定义工作区共享依赖 ---
+[workspace.dependencies]
+# --- Core Async & Utilities ---
+tokio = { version = "1.44.2", features = ["full"] }
+async-trait = "0.1.88"
+futures-util = "0.3.31"
+thiserror = "1.0.63" # Updated to latest stable from crates.io
+anyhow = "1.0.86" # Updated to latest stable from crates.io
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] } # Updated to latest stable from crates.io
+bytes = "1.6.1" # Updated to latest stable from crates.io
+rand = "0.8.5" # Updated to latest stable from crates.io
+hex = "0.4.3" # Updated to latest stable from crates.io
+
+# --- Web & Network ---
+axum = { version = "0.8.4", features = ["ws", "macros", "json"] }
+tower-http = { version = "0.6.2", features = ["cors"] }
+reqwest = { version = "0.12.15", features = ["json", "rustls-tls"], default-features = false }
+url = { version = "2.5.4", features = ["serde"] }
+
+# --- Serialization & Data ---
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+config = { version = "0.15.11", features = ["toml", "json"] }
+toml_edit = "0.22.26"
+uuid = { version = "1.16.0", features = ["v4", "serde"] }
+chrono = { version = "0.4.41", features = ["serde"] }
+base64 = "0.22.1"
+zip = "2.6.1"
+
+# --- Database ---
+sqlx = { version = "0.8.5", features = ["runtime-tokio-rustls", "sqlite", "uuid", "chrono", "macros", "json"] }
+
+# --- AI Libraries ---
+async-openai = "0.28.1"
+hmac = "0.12.1"
+sha1 = "0.10.6"
+
+# --- System & Config Paths ---
+directories = "6.0.0"
+
+# --- Local Workspace Crates (Define with path and version for inheritance) ---
+elfradio_types = { path = "crates/elfradio_types", version = "0.1.0" }
+elfradio_config = { path = "crates/elfradio_config", version = "0.1.0" }
+elfradio_ai = { path = "crates/elfradio_ai", version = "0.1.0" }
+elfradio_aux_client = { path = "crates/elfradio_aux_client", version = "0.1.0" }
+elfradio_core = { path = "crates/elfradio_core", version = "0.1.0" }
+elfradio_api = { path = "crates/elfradio_api", version = "0.1.0" }
+elfradio_db = { path = "crates/elfradio_db", version = "0.1.0" }
+elfradio_dsp = { path = "crates/elfradio_dsp", version = "0.1.0" }
+elfradio_hardware = { path = "crates/elfradio_hardware", version = "0.1.0" }
+elfradio_app = { path = "crates/elfradio_app", version = "0.1.0" }
+
+# --- Dev Dependencies (Common - Add if needed) ---
+# tempfile = "3.19.1"
+# assert_matches = "1.5.0"
+
 
 # Dependencies for the main binary target defined in src/main.rs
 # These are NOT inherited by workspace members unless they explicitly depend on them.
 
 # Defines the main executable binary for the ElfRadio application.
+# ... (potentially other sections like [[bin]] if elfradio_app is the main binary crate) ...

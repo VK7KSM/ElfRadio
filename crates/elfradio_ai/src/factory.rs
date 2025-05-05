@@ -8,8 +8,7 @@ use tracing::{info, error};
 use elfradio_types::{AiProvider, Config, OpenAICompatibleConfig, AiError};
 
 // Import client implementations and the core trait/error from this crate
-// DELETE: use super::{AiClient, AiError, GoogleAiClient, StepFunTtsClient, OpenAICompatibleClient};
-use super::{AiClient, StepFunTtsClient, OpenAICompatibleClient}; // Removed GoogleAiClient, kept others
+use super::{AiClient, GoogleAiClient, StepFunTtsClient, OpenAICompatibleClient}; // 恢复 GoogleAiClient 导入
 
 /// Creates an AI client based on the AI configuration found within the main Config.
 /// Returns `AiError::ProviderNotSpecified` if no provider is set in the config.
