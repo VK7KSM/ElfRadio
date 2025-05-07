@@ -5,6 +5,7 @@ use tokio::task::JoinHandle;
 use elfradio_types::{
     Config,
     ClientMap, AudioOutputSender, TxItem, TaskInfo, TaskStatus,
+    AuxServiceClient,
 };
 use elfradio_ai::AiClient;
 use sqlx::SqlitePool;
@@ -19,6 +20,7 @@ pub struct AppState {
     pub audio_output_sender: Arc<Mutex<Option<AudioOutputSender>>>,
     pub is_transmitting: Arc<Mutex<bool>>,
     pub ai_client: Arc<RwLock<Option<Arc<dyn AiClient + Send + Sync>>>>,
+    pub aux_client: Arc<RwLock<Option<Arc<dyn AuxServiceClient + Send + Sync>>>>,
     pub active_task: Mutex<Option<TaskInfo>>,
     pub task_status: Mutex<TaskStatus>,
     pub shutdown_tx: watch::Sender<bool>,
@@ -45,6 +47,7 @@ impl AppState {
             audio_output_sender,
             is_transmitting,
             ai_client: Arc::new(RwLock::new(None)),
+            aux_client: Arc::new(RwLock::new(None)),
             active_task: Mutex::new(None),
             task_status: Mutex::new(TaskStatus::Idle),
             shutdown_tx,

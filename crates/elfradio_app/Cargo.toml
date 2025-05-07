@@ -17,10 +17,11 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 elfradio_api = { workspace = true }
-cpal = "0.15.0"
+cpal = "0.15.3"
 webrtc-vad = "0.4.0"
 sqlx = { workspace = true }
 elfradio_ai = { workspace = true }
 elfradio_db = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+elfradio_aux_client = { workspace = true }

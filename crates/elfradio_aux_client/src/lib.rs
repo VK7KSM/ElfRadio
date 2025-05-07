@@ -10,7 +10,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use std::sync::Arc; // 添加 Arc 导入
 
 // Correct import for the trait
-use elfradio_types::AuxServiceClient;
+use elfradio_types::{AuxServiceClient, AuxServiceProvider, Config};
 
 // Re-import the shared AiError type
 use elfradio_types::AiError;
@@ -414,5 +414,78 @@ impl AuxServiceClient for GoogleAuxClient {
         }
 
         Ok(transcript)
+    }
+}
+
+/// 工厂函数，用于创建匹配当前配置的辅助服务客户端。
+///
+/// 根据配置中的 `aux_service_settings.provider` 创建对应的客户端实例。
+/// 如果未配置或初始化失败，返回 `Ok(None)`。
+///
+/// # 参数
+///
+/// * `config` - 应用配置对象的引用
+///
+/// # 返回值
+///
+/// 返回 `Result<Option<Arc<dyn AuxServiceClient + Send + Sync>>, AiError>`：
+/// - `Ok(Some(client))` - 成功创建了客户端
+/// - `Ok(None)` - 未配置辅助服务或配置不完整
+/// - `Err(e)` - 创建过程中发生错误
+pub async fn create_aux_client(config: &Config) -> Result<Option<Arc<dyn AuxServiceClient + Send + Sync>>, AiError> {
+    let provider = match &config.aux_service_settings.provider {
+        Some(provider) => provider,
+        None => {
+            info!("No auxiliary service provider specified in config. Aux features unavailable.");
+            return Ok(None);
+        }
+    };
+
+    info!("Creating auxiliary service client for provider: {:?}", provider);
+
+    match provider {
+        AuxServiceProvider::Google => {
+            debug!("Initializing Google auxiliary client...");
+            match GoogleAuxClient::new() {
+                Ok(client) => {
+                    info!("Google auxiliary client initialized successfully.");
+                    Ok(Some(Arc::new(client) as Arc<dyn AuxServiceClient + Send + Sync>))
+                }
+                Err(e) => {
+                    if let AiError::AuthenticationError(_) = &e {
+                        warn!("Google API Key not found or invalid. Google auxiliary services unavailable.");
+                        // 配置不完整不是严重错误，返回 None
+                        Ok(None)
+                    } else {
+                        error!("Failed to initialize Google auxiliary client: {:?}", e);
+                        Err(e)
+                    }
+                }
+            }
+        }
+        AuxServiceProvider::Aliyun => {
+            debug!("Initializing Aliyun auxiliary client...");
+            match AliyunAuxClient::new().await {
+                Ok(client) => {
+                    info!("Aliyun auxiliary client initialized successfully.");
+                    Ok(Some(Arc::new(client) as Arc<dyn AuxServiceClient + Send + Sync>))
+                }
+                Err(e) => {
+                    if let AiError::AuthenticationError(_) = &e {
+                        warn!("Aliyun credentials not found or invalid. Aliyun auxiliary services unavailable.");
+                        // 配置不完整不是严重错误，返回 None
+                        Ok(None)
+                    } else {
+                        error!("Failed to initialize Aliyun auxiliary client: {:?}", e);
+                        Err(e)
+                    }
+                }
+            }
+        }
+        AuxServiceProvider::Baidu => {
+            warn!("Baidu auxiliary services not yet implemented.");
+            Ok(None)
+        }
+        // 如果将来添加了其他提供商，可以在这里添加对应的处理分支
     }
 }

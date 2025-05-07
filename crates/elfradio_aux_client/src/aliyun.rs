@@ -79,8 +79,8 @@ impl AliyunAuxClient {
     fn calculate_aliyun_signature(
         &self,
         method: &str, // "GET" or "POST"
-        api_path: &str, // e.g., "/api/translate/web/general"
-        parameters: &BTreeMap<String, String> // Sorted map of parameters included in the signature (usually common + action)
+        api_path: &str, // 应始终为 "/"，用于签名计算
+        parameters: &BTreeMap<String, String> 
     ) -> Result<String, AiError> {
         // 1. Percent-encode keys and values according to RFC3986
         let mut encoded_pairs: Vec<String> = Vec::new();
@@ -95,13 +95,13 @@ impl AliyunAuxClient {
         let canonicalized_query_string = encoded_pairs.join("&");
         trace!("Canonicalized Query String for Signature: {}", canonicalized_query_string);
 
-        // 3. Construct String-to-Sign (VERIFY THIS FORMAT WITH ALIYUN MACHINE TRANSLATION DOCS)
-        // Format: METHOD + "&" + PercentEncode(Path) + "&" + PercentEncode(CanonicalQueryString)
+        // 3. Construct String-to-Sign
+        // 修改：始终使用 "/" 作为签名路径
         let string_to_sign = format!(
              "{}&{}&{}",
              method.to_uppercase(),
-             percent_encode(api_path), // Use the provided API path
-             percent_encode(&canonicalized_query_string) // Percent-encoded canonical query string
+             percent_encode("/"), // 固定使用 "/" 作为签名路径
+             percent_encode(&canonicalized_query_string) 
          );
 
         trace!("String-to-Sign: {}", string_to_sign);
@@ -175,26 +175,15 @@ struct AliyunTranslateResponse {
 impl AuxServiceClient for AliyunAuxClient {
     /// Translates text using Aliyun Machine Translation API (General Version).
     async fn translate(&self, text: &str, target_language: &str, source_language: Option<&str>) -> Result<String, AiError> {
-        // API Details - VERIFY THESE AGAINST OFFICIAL DOCS
-        let action = "TranslateGeneral"; // API Action name
-        let version = "2018-10-12";       // API Version for general translation
-        let endpoint = "mt.aliyuncs.com"; // General endpoint, consider region if needed (e.g., mt.cn-hangzhou.aliyuncs.com)
-        let api_path = "/api/translate/web/general"; // Specific path for the general web translation API
-        let base_url = format!("https://{}{}", endpoint, api_path);
+        // API Details
+        let action = "TranslateGeneral"; 
+        let version = "2018-10-12";
+        let endpoint = "mt.aliyuncs.com";
+        let signing_path = "/"; // 修改：签名路径始终为 "/"
+        let base_url = format!("https://{}", endpoint); // 修改：base_url 仅包含主机名
         let method = "POST";
 
-        // 1. Prepare Request Body (Parameters specific to the action)
-        let request_body = AliyunTranslateRequest {
-            format_type: "text",
-            source_language: source_language.unwrap_or("auto"),
-            target_language,
-            source_text: text,
-            scene: Some("general"), // Or make configurable/optional if needed
-        };
-        trace!("Aliyun Translate Request Body: {:?}", request_body);
-
-        // 2. Prepare Common & Action Parameters for Signature (Sorted)
-        // These go into the query string part of the request and are signed.
+        // 移除 request_body 的创建，将所有参数移至 params_for_sig
         let mut params_for_sig = BTreeMap::new();
         // Common Parameters
         params_for_sig.insert("Format".to_string(), "JSON".to_string());
@@ -203,35 +192,38 @@ impl AuxServiceClient for AliyunAuxClient {
         params_for_sig.insert("SignatureMethod".to_string(), "HMAC-SHA1".to_string());
         params_for_sig.insert("Timestamp".to_string(), Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string());
         params_for_sig.insert("SignatureVersion".to_string(), "1.0".to_string());
-        params_for_sig.insert("SignatureNonce".to_string(), Uuid::new_v4().to_string().replace('-', "")); // Unique nonce
-        // Add region if needed for endpoint/signing: params_for_sig.insert("RegionId".to_string(), "cn-hangzhou".to_string());
-        // Action Parameter (included in query string for signing)
+        params_for_sig.insert("SignatureNonce".to_string(), Uuid::new_v4().to_string().replace('-', ""));
+
+        // Action Specific Parameters - 移至参数映射中
         params_for_sig.insert("Action".to_string(), action.to_string());
+        params_for_sig.insert("SourceLanguage".to_string(), source_language.unwrap_or("auto").to_string());
+        params_for_sig.insert("TargetLanguage".to_string(), target_language.to_string());
+        params_for_sig.insert("SourceText".to_string(), text.to_string());
+        params_for_sig.insert("FormatType".to_string(), "text".to_string());
+        params_for_sig.insert("Scene".to_string(), "general".to_string());
 
-        // 3. Calculate Signature using parameters intended for query string
-        let signature = self.calculate_aliyun_signature(method, api_path, &params_for_sig)?;
+        // 使用 signing_path 计算签名
+        let signature = self.calculate_aliyun_signature(method, signing_path, &params_for_sig)?;
 
-        // 4. Build Final Query String with Signature
-        params_for_sig.insert("Signature".to_string(), signature); // Add signature to the map
+        // 将签名添加到参数中，然后生成查询字符串
+        params_for_sig.insert("Signature".to_string(), signature);
         let query_string = form_urlencoded::Serializer::new(String::new())
-            .extend_pairs(params_for_sig.iter()) // URL-encode the parameters
+            .extend_pairs(params_for_sig.iter())
             .finish();
 
-        // 5. Construct Final URL
+        // 构造最终 URL（包含查询字符串）
         let final_url = format!("{}?{}", base_url, query_string);
         debug!("Sending translation request to Aliyun API Endpoint: {}", final_url);
 
-        // 6. Send Request (POST with JSON body and signature in query params)
+        // 发送请求（使用空请求体）
         let response = self.http_client
-            .post(&final_url) // URL contains common params + signature
+            .post(&final_url)
             .header(ACCEPT, "application/json")
-            .header(CONTENT_TYPE, "application/json") // Body is JSON
-            .json(&request_body) // Send the action-specific params as JSON body
+            .body("") // 空请求体，所有参数已在查询字符串中
             .send()
             .await
             .map_err(|e| {
                  error!("Aliyun network request failed: {}", e);
-                 // Use RequestError instead of NetworkError
                  AiError::RequestError(format!("Aliyun network request failed: {}", e))
             })?;
 
@@ -271,9 +263,9 @@ impl AuxServiceClient for AliyunAuxClient {
 
         // If we have a 'Data' field and HTTP status is success, extract translation
         if status.is_success() {
-            if let Some(data) = response_body.data {
+        if let Some(data) = response_body.data {
                 debug!("Aliyun translation successful (RequestId: {}).", response_body.request_id);
-                Ok(data.translated)
+            Ok(data.translated)
             } else {
                 // Success status but no data field - treat as an API error or unexpected response
                 error!("Aliyun API returned success status ({}) but no 'Data' field in response. RequestId: {}", status, response_body.request_id);

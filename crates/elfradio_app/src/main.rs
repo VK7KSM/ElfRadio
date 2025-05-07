@@ -10,8 +10,7 @@ use elfradio_core::run_core_logic;
 use elfradio_core::AppState;
 // 删除重复的AppState导入
 // use elfradio_core::state::AppState; 
-use tokio::sync::{mpsc, Mutex};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, Mutex, RwLock, watch};
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::layer::SubscriberExt;
@@ -37,6 +36,10 @@ use std::str::FromStr; // Import FromStr for Level::from_str
 use chrono::Utc; // Import Utc for timestamps
 // use elfradio_logging; // DELETE this line
 use elfradio_types::Config as AppConfig; // Assuming AppConfig is used
+use chrono;
+// --- ADDED: imports for AI and AUX client creation ---
+use elfradio_ai::factory::create_ai_client; // Import specifically from factory module
+use elfradio_aux_client::create_aux_client; // Import from elfradio_aux_client crate
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -138,12 +141,31 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // --- Initialize AI Client (moved after channel/db creation) ---
-     info!("Initializing AI Client...");
-    let ai_client_result = elfradio_ai::create_ai_client(&config).await; // Pass the whole config
+    info!("Initializing AI Client...");
+    let ai_client_result = create_ai_client(&config).await; // Pass the whole config
 
+    // --- Initialize Auxiliary Client ---
+    info!("Initializing Auxiliary Client...");
+    // Call the factory function from elfradio_aux_client
+    let aux_client_result = create_aux_client(&config).await; // Use .await as it's async
+
+    let aux_client_for_state = match aux_client_result {
+        Ok(Some(client)) => {
+            info!("Auxiliary Client initialized successfully.");
+            Some(client)
+        }
+        Ok(None) => {
+            warn!("Auxiliary Client not configured or failed to initialize. Aux features unavailable.");
+            None
+        }
+        Err(e) => {
+            error!("Unexpected error during auxiliary client creation: {}. Aux features unavailable.", e);
+            None
+        }
+    };
 
     // --- Instantiate AppState (moved after channel/db/ai creation) ---
-     info!("Initializing AppState...");
+    info!("Initializing AppState...");
     let app_state = Arc::new(AppState::new(
         Arc::new(config.clone()),
         tx_sender,
@@ -163,8 +185,15 @@ async fn main() -> anyhow::Result<()> {
     } else if let Err(AiError::ProviderNotSpecified) = ai_client_result {
         warn!("AI Provider not specified in config. AI features unavailable until configured.");
     } else if let Err(e) = ai_client_result {
-        error!("Failed to create AI client during startup: {:?}. Exiting.", e);
-        return Err(anyhow!("AI Client initialization failed: {}", e));
+        error!("Failed to create AI client during startup: {:?}. AI features unavailable.", e);
+        // 不因此退出程序，只记录错误并继续
+    }
+
+    // Set the aux_client in AppState:
+    if let Some(client) = aux_client_for_state {
+        let mut aux_guard = app_state.aux_client.write().await;
+        *aux_guard = Some(client);
+        info!("Auxiliary Client stored in AppState.");
     }
 
     // Now we can safely use info!, warn!, error! macros which will go to both targets
@@ -254,15 +283,25 @@ impl LogEntryChannelWriter {
 impl Write for LogEntryChannelWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let log_string = String::from_utf8_lossy(buf);
+
+        // Create LogEntry using ONLY the fields defined in elfradio_types::LogEntry
         let entry = LogEntry {
-            timestamp: Utc::now(),
-            direction: LogDirection::Internal,
-            content_type: LogContentType::Text,
-            content: log_string.into_owned(),
+             timestamp: chrono::Utc::now(), // Use chrono Utc for timestamp
+             // Determine direction and content_type based on context if possible,
+             // otherwise use defaults. Using Internal/Text as placeholder.
+             direction: LogDirection::Internal, // Use an existing variant like Internal
+             content_type: LogContentType::Text, // Use an existing variant like Text
+             content: log_string.into_owned(), // Use the log string as content
+             // DO NOT include level, message, target, task_id fields
         };
+
+        // Send the structured LogEntry
         if self.log_entry_tx.send(entry).is_err() {
-            eprintln!("Error: Failed to send structured log via MPSC channel (receiver likely dropped).");
+             // Log error to stderr if channel is closed
+             eprintln!("Error: Failed to send structured log via MPSC channel (receiver dropped?).");
         }
+
+        // Return Ok, pretending bytes were written to satisfy io::Write
         Ok(buf.len())
     }
 

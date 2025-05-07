@@ -67,7 +67,7 @@ impl OpenAICompatibleClient {
     /// if essential configuration (base URL, API key) is missing.
     pub fn new(config: OpenAICompatibleConfig) -> Result<Self, AiError> {
         debug!(
-            "Initializing OpenAICompatibleClient for name: {:?}, base_url: {:?}",
+            "Initializing OpenAICompatibleClient for name: {:?}, base_url: {:?}, using provided config",
             config.name, config.base_url
         );
 
@@ -76,29 +76,15 @@ impl OpenAICompatibleClient {
             AiError::ClientError("Missing required configuration: base_url".to_string())
         })?;
 
-        let api_key_result = get_user_config_value::<String>("ai_settings.openai_compatible.api_key")
-            .map_err(|e| {
-                error!("Failed to read OpenAI-compatible API key from user config: {}", e);
-                AiError::ClientError(format!("Failed to read API key from user config: {}", e))
-            })?;
-        
-        let api_key = match api_key_result {
-            Some(key) if !key.is_empty() => key,
-            _ => {
-                error!("OpenAI Compatible API Key not found or empty in user config.");
-                return Err(AiError::AuthenticationError(
-                    "OpenAI Compatible API Key not found or empty in user config.".to_string()
-                ));
-            }
-        };
+        let api_key = config.api_key.clone().ok_or_else(|| {
+            error!("Missing required configuration: api_key for OpenAICompatibleClient");
+            AiError::AuthenticationError("OpenAI Compatible API Key not found or empty in provided config.".to_string())
+        })?;
 
-        // Create the SDK configuration, setting the crucial base URL and API key
         let sdk_config = OpenAIConfig::new()
             .with_api_base(api_base)
             .with_api_key(api_key);
-        // Add other config options like org_id if needed from config
 
-        // Create the SDK client instance
         let client = OpenAIClientSdk::with_config(sdk_config);
 
         info!(
@@ -107,7 +93,7 @@ impl OpenAICompatibleClient {
         );
         Ok(Self {
             client,
-            config: Arc::new(config), // Store the original config in an Arc
+            config: Arc::new(config),
         })
     }
 }

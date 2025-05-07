@@ -1,0 +1,83 @@
+# Default configuration values for ElfRadio
+
+app_name = "ElfRadio"
+log_level = "info"
+tasks_base_directory = "./elfradio_tasks" # Or adjust the default path as needed
+ui_language = "en"
+
+# --- Hardware ---
+[hardware]
+# audio_input_device = "Default" # Example: Specify if needed, otherwise None
+# audio_output_device = "Default" # Example: Specify if needed, otherwise None
+input_sample_rate = 16000
+# serial_port = "COM3" # Example
+ptt_signal = "rts"
+# sdr_device_args = "driver=rtlsdr" # Example
+enable_rx_tx_separation = false
+# rx_audio_input_device = "Default RX" # Example
+# rx_sdr_device_args = "driver=rtlsdr,direct_sampling=1" # Example
+
+# --- AI Settings ---
+[ai_settings]
+# provider = "GoogleGemini" # Example: Explicitly set a provider if desired by default
+temperature = 0.7
+max_tokens = 1024
+# system_prompt = "You are a helpful assistant." # Example
+# translate_target_language = "en" # Example
+
+# Nested provider settings (optional in default, needed if provider is set)
+# [ai_settings.google]
+# preferred_model = "gemini-2.0-flash"
+# stt_language = "en-US"
+# tts_voice = "en-US-Wavenet-D"
+# api_key = "" # Leave empty, loaded from user config
+
+# [ai_settings.stepfun_tts]
+# api_key = "" # Leave empty, loaded from user config
+
+# [ai_settings.openai_compatible]
+# name = "My OAI Service"
+# base_url = "http://localhost:8080/v1"
+# preferred_model = "some-model"
+# api_key = "" # Leave empty, loaded from user config
+
+# --- Aux Service Settings ---
+[aux_service_settings]
+# provider = "Aliyun" # Example: Set default aux provider if needed
+# [aux_service_settings.google] # Structure placeholder, keys loaded from user config
+# [aux_service_settings.aliyun] # Structure placeholder, keys loaded from user config
+# [aux_service_settings.baidu]  # Structure placeholder, keys loaded from user config
+
+# --- Timing ---
+[timing]
+ptt_pre_delay_ms = 100
+ptt_post_delay_ms = 100
+tx_hold_timer_s = 5
+tx_interval_s = 60
+max_tx_duration_s = 180
+max_sstv_duration_s = 180
+
+# --- Radio Etiquette ---
+[radio_etiquette]
+nickname = "ElfRadio Operator"
+addressing_interval_min = 10
+
+# --- Security ---
+[security]
+end_task_phrase = "STOP TASK NOW"
+
+# --- Signal Tone ---
+[signal_tone]
+enabled = false
+start_freqs_hz = [1000.0, 1500.0]
+end_freqs_hz = [1500.0, 1000.0]
+duration_ms = 100
+
+# --- SSTV ---
+[sstv_settings]
+mode = "Martin M1"
+
+# --- Network ---
+[network]
+listen_address = "0.0.0.0"
+listen_port = 5900

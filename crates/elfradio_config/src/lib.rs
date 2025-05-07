@@ -1,11 +1,11 @@
 use elfradio_types::Config as AppConfig; // Alias to avoid naming collision
 use config::{Config as ConfigRs, Environment, File, ConfigError as RsConfigError};
-use directories::ProjectDirs;
+// use directories::ProjectDirs; // REMOVED
 use std::path::PathBuf;
 use thiserror::Error;
 use tracing::{debug, info, warn, error}; // Ensure tracing imports are present
 use std::fs; // Ensure fs is imported
- // Add this import
+use std::env; // ADDED for current_dir
 use serde_json::Value as JsonValue; // Added for input type
 use toml_edit::{DocumentMut, value as toml_value, Item}; // Added for TOML writing and Item
 
@@ -17,161 +17,131 @@ pub enum ConfigError {
     #[error("Configuration parsing or validation error: {0}")]
     Config(#[from] RsConfigError),
 
-    #[error("Could not determine a valid configuration directory")]
-    DirectoryError,
+    // #[error("Could not determine a valid configuration directory")] // REMOVED as DirectoryError is no longer distinct from IoError for CWD
+    // DirectoryError, // REMOVED
 }
 
-/// Helper function to get the full path to the user's config file.
-/// Uses ProjectDirs to find the appropriate configuration directory based on OS conventions.
-fn get_user_config_path() -> Result<PathBuf, ConfigError> {
-    // Use ProjectDirs to find OS-specific config directory
-    // Example: Linux: /home/user/.config/ElfRadio/elfradio_config.toml
-    //          Windows: C:\Users\user\AppData\Roaming\ElfRadio\ElfRadio\config\elfradio_config.toml
-    //          macOS: /Users/user/Library/Application Support/net.ElfRadio.ElfRadio/elfradio_config.toml
-    // NOTE: The exact path depends on the `directories` crate implementation.
-    match ProjectDirs::from("net", "ElfRadio", "ElfRadio") {
-        Some(proj_dirs) => {
-            let config_dir = proj_dirs.config_dir();
-            // Note: Directory creation is deferred to where it's needed (e.g., writing/copying).
-            Ok(config_dir.join("elfradio_config.toml"))
+/// Helper function to get the full path to the config file in the app's directory.
+/// Assumes the application runs with its working directory set to the app's root.
+fn get_app_config_path() -> Result<PathBuf, ConfigError> {
+    // Get the current working directory
+    match env::current_dir() {
+        Ok(mut path) => {
+            path.push("elfradio_config.toml"); // Append the config file name
+            Ok(path)
         }
-        None => {
-            // Use tracing::error! here
-            tracing::error!("Could not determine the user configuration directory.");
-            // Use the correct variant, assuming it doesn't take a String
-            Err(ConfigError::DirectoryError) 
+        Err(e) => {
+            // Log error if CWD cannot be determined
+            tracing::error!("Could not determine the current working directory: {}", e);
+            // Map the IO error to our ConfigError::Io variant
+            Err(ConfigError::IoError(e))
         }
     }
 }
 
 /// Loads the ElfRadio configuration.
 ///
-/// Checks if the user configuration file (`elfradio_config.toml` in the platform-specific
-/// config directory) exists. If not, it attempts to create it by copying from
+/// Checks if the application configuration file (`elfradio_config.toml` in the application's
+/// current working directory) exists. If not, it attempts to create it by copying from
 /// `config/default.toml` (relative to the CWD).
 ///
 /// Afterwards, it merges configuration from multiple sources using `config-rs`:
 /// 1. `config/default.toml` (relative to CWD, required base).
-/// 2. The user's `elfradio_config.toml` file (optional, overrides defaults if it exists or was copied).
+/// 2. The `elfradio_config.toml` file in the app's CWD (optional, overrides defaults if it exists or was copied).
 /// 3. Environment variables prefixed with `ELFRADIO_` (highest precedence).
 pub fn load_config() -> Result<AppConfig, ConfigError> {
-    // --- Step 1: Check and copy default config if necessary ---
-    let user_config_path = get_user_config_path()?;
+    // --- Step 1: Check and copy default config if necessary ---\
+    let app_config_path = get_app_config_path()?; // Use the new helper
 
-    if !user_config_path.exists() {
-        info!("User config file not found at {:?}, attempting to create from default.", user_config_path);
+    if !app_config_path.exists() {
+        info!("App config file not found at {:?}, attempting to create from default.", app_config_path);
 
-        if let Some(parent_dir) = user_config_path.parent() {
-            fs::create_dir_all(parent_dir).map_err(|e| {
-                error!("Failed to create user config directory {:?}: {}", parent_dir, e);
-                ConfigError::IoError(e)
-            })?;
-        } else {
-             error!("Could not determine parent directory for user config path {:?}", user_config_path);
-             return Err(ConfigError::DirectoryError);
-        }
+        // No need to create parent directory for CWD, fs::copy will create the file.
+        // However, if app_config_path were nested like "config/elfradio_config.toml",
+        // then creating "config/" dir would be needed if it didn't exist.
 
-        // IMPORTANT: Assumes 'config/default.toml' is relative to the CWD.
+        // IMPORTANT: Assumes 'config/default.toml' exists relative to the CWD where the app runs.
+        // For robust portable deployment, consider embedding or placing it next to the executable.
         let default_config_path = PathBuf::from("config/default.toml");
 
         if default_config_path.exists() {
-            match fs::copy(&default_config_path, &user_config_path) {
-                Ok(_) => info!("Successfully copied default config to {:?}", user_config_path),
+            match fs::copy(&default_config_path, &app_config_path) {
+                Ok(_) => info!("Successfully copied default config to {:?}.", app_config_path),
                 Err(e) => {
-                    error!("Failed to copy default config from {:?} to {:?}: {}", default_config_path, user_config_path, e);
-                    warn!("Proceeding without user config file due to copy error.");
-                    // Don't return error here, just warn and proceed
+                    error!("Failed to copy default config from {:?} to {:?}: {}. Proceeding without app-specific config file.", default_config_path, app_config_path, e);
+                    // Don't return error here, just warn and proceed. config-rs will rely on default.toml and env vars.
                 }
             }
         } else {
             warn!(
-                "Default config template not found at {:?}. Cannot create user config file. App will rely on built-in defaults and environment variables.",
+                "Default config template not found at {:?}. Cannot create app-specific config file. App will rely on built-in defaults and environment variables if this is the first run.",
                 default_config_path
             );
-             // It might be better to return an error here if the default is mandatory
-             // return Err(ConfigError::IoError(std::io::Error::new(std::io::ErrorKind::NotFound, "Default config not found")));
+            // If default.toml is critical and missing, consider returning an error:
+            // return Err(ConfigError::IoError(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Default config template not found at {:?}", default_config_path))));
         }
     }
 
-    // --- Step 2: Load configuration using config-rs ---
-    // Use the user_config_path determined earlier
+    // --- Step 2: Load configuration using config-rs ---\
     debug!("Building configuration sources...");
     let builder = ConfigRs::builder()
         // 1. Add default config file (relative path, required base)
-        //    Ensure this path is correct for the runtime environment.
-        //    Make it required=false because if it failed to copy, we might still want to run with built-in defaults + user + env
-        //    Alternatively, make it required=true and handle the error if default doesn't exist AND copy failed. Let's make it true for robustness.
+        // IMPORTANT: Assumes 'config/default.toml' exists relative to the CWD where the app runs.
         .add_source(File::with_name("config/default.toml").required(true))
-        // 2. Add user config file (optional, overrides defaults if it exists or was copied)
-        //    Clone path needed as `File::from` takes ownership.
-        .add_source(File::from(user_config_path.clone()).required(false))
+        // 2. Add app-specific config file from CWD (optional, overrides defaults if it exists or was copied)
+        .add_source(File::from(app_config_path.clone()).required(false))
         // 3. Add environment variables (highest precedence)
         .add_source(
             Environment::with_prefix("ELFRADIO")
-                .prefix_separator("_") // Original prefix was `_`
-                .separator("__") // Double underscore for nested keys
-                .try_parsing(true) // Attempt to parse values like bools/numbers
-                .list_separator(",") // Support comma-separated lists
+                .prefix_separator("_")
+                .separator("__")
+                .try_parsing(true)
+                .list_separator(",")
         );
 
-    // Build and deserialize the final configuration
     debug!("Building and deserializing configuration...");
-    // Use the `?` operator thanks to `#[from]` on ConfigError::Config
     let config_rs = builder.build()?;
     let app_config = config_rs.try_deserialize::<AppConfig>()?;
 
-    info!("Configuration loaded successfully.");
+    info!("Configuration loaded successfully from app directory.");
     Ok(app_config)
-
-    // Note: The previous loading logic based on AppConfig::default() is removed
-    // as config-rs now handles the layering, starting from default.toml.
 }
 
-/// Retrieves a specific configuration value directly from the user's config file.
-/// Only reads the user file, ignoring defaults and environment variables.
+/// Retrieves a specific configuration value directly from the application's config file.
+/// Only reads the `elfradio_config.toml` in the CWD, ignoring defaults and environment variables.
 /// Useful for reading sensitive values like API keys at the time of use.
-/// Returns Ok(None) if the user file doesn't exist or the key is not found within it.
+/// Returns Ok(None) if the app config file doesn't exist or the key is not found within it.
 /// Returns Err(ConfigError) for file read/parse errors or type mismatches.
 pub fn get_user_config_value<T: serde::de::DeserializeOwned>(key: &str) -> Result<Option<T>, ConfigError> {
-    // Get the path to the user-specific config file
-    let user_config_path = get_user_config_path()?; // Use the helper function
+    let app_config_path = get_app_config_path()?; // Use the new helper
 
-    if user_config_path.exists() {
-        // Build a temporary config instance loading *only* the user file
-        // Use tracing for logging potential issues during this specific read
-        tracing::debug!("Attempting to read key '{}' from user config file: {:?}", key, user_config_path);
+    if app_config_path.exists() {
+        tracing::debug!("Attempting to read key '{}' from app config file: {:?}", key, app_config_path);
         let config_reader = ConfigRs::builder()
-            // Source only the user config file. Make it required because we know it exists.
-            .add_source(File::from(user_config_path.clone()).required(true))
+            .add_source(File::from(app_config_path.clone()).required(true))
             .build()
-            // Error here means the user's TOML file is likely invalid
             .map_err(|e| {
-                tracing::error!("Failed to build config reader for user file {:?}: {}", user_config_path, e);
-                ConfigError::Config(e) // Map the config-rs error
+                tracing::error!("Failed to build config reader for app file {:?}: {}", app_config_path, e);
+                ConfigError::Config(e)
             })?;
 
-        // Attempt to get the specific key from the loaded user config
         match config_reader.get::<T>(key) {
             Ok(value) => {
-                tracing::debug!("Successfully retrieved key '{}' from user config file.", key);
-                Ok(Some(value)) // Value found and successfully deserialized
+                tracing::debug!("Successfully retrieved key '{}' from app config file.", key);
+                Ok(Some(value))
             }
             Err(e) => {
-                // Use if let for more idiomatic matching on the error kind
                 if let RsConfigError::NotFound(_) = e {
-                     // Specific 'key not found' in this user file is Ok(None)
-                     tracing::debug!("Key '{}' not found in user config file {:?}.", key, user_config_path);
+                     tracing::debug!("Key '{}' not found in app config file {:?}.", key, app_config_path);
                      Ok(None)
                 } else {
-                     // Other errors (like type mismatch during deserialization) are real errors
-                     tracing::error!("Error getting key '{}' from user config file {:?}: {}", key, user_config_path, e);
-                     Err(ConfigError::Config(e)) // Propagate other config errors (already mapped via #[from])
+                     tracing::error!("Error getting key '{}' from app config file {:?}: {}", key, app_config_path, e);
+                     Err(ConfigError::Config(e))
                 }
             }
         }
     } else {
-        // User config file doesn't exist, so the key cannot be present in it
-        tracing::debug!("User config file {:?} does not exist, cannot retrieve key '{}'.", user_config_path, key);
+        tracing::debug!("App config file {:?} does not exist, cannot retrieve key '{}'.", app_config_path, key);
         Ok(None)
     }
 }
@@ -180,9 +150,7 @@ pub fn get_user_config_value<T: serde::de::DeserializeOwned>(key: &str) -> Resul
 /// Handles basic types (null, bool, number, string). Arrays/Objects need careful mapping.
 fn json_to_toml_value(json_val: &JsonValue) -> Result<Item, ConfigError> {
     match json_val {
-        // TOML doesn't have null. We map it to an empty string as a placeholder.
-        // Consider if a different representation or error is more appropriate.
-        JsonValue::Null => Ok(toml_value("")),
+        JsonValue::Null => Ok(toml_value("")), // Or handle differently
         JsonValue::Bool(b) => Ok(toml_value(*b)),
         JsonValue::Number(n) => {
             if let Some(i) = n.as_i64() {
@@ -190,7 +158,6 @@ fn json_to_toml_value(json_val: &JsonValue) -> Result<Item, ConfigError> {
             } else if let Some(f) = n.as_f64() {
                 Ok(toml_value(f))
             } else {
-                // Use format! to create the error string, then wrap in RsConfigError::Message
                 Err(ConfigError::Config(RsConfigError::Message(format!("Unsupported number type in JSON: {}", n))))
             }
         }
@@ -204,73 +171,49 @@ fn json_to_toml_value(json_val: &JsonValue) -> Result<Item, ConfigError> {
     }
 }
 
-/// Saves or updates configuration values in the user's config file.
+/// Saves or updates configuration values in the application's config file (`elfradio_config.toml` in CWD).
 /// Expects a flat JSON object where keys correspond to top-level TOML keys.
-/// Creates the file or directory if it doesn't exist.
+/// Creates the file if it doesn't exist.
 /// Note: This version only supports updating/adding top-level keys.
-/// Nested keys (e.g., "ai_settings.google.api_key") require more complex logic.
 pub fn save_user_config_values(values_to_save: JsonValue) -> Result<(), ConfigError> {
-    let user_config_path = get_user_config_path()?;
-    debug!("Attempting to save values to user config file: {:?}", user_config_path);
+    let app_config_path = get_app_config_path()?; // Use the new helper
+    debug!("Attempting to save values to app config file: {:?}", app_config_path);
 
-    // Ensure parent directory exists
-    if let Some(parent_dir) = user_config_path.parent() {
-        // Map potential I/O error using #[from]
-        fs::create_dir_all(parent_dir)?;
-        debug!("Ensured user config directory exists: {:?}", parent_dir);
-    } else {
-        // This case should be unlikely if get_user_config_path succeeded
-        error!("Could not determine parent directory for user config path {:?}", user_config_path);
-        return Err(ConfigError::DirectoryError);
-    }
+    // No need to create parent_dir for CWD, fs::write will create the file or truncate.
+    // If the path was nested, directory creation would be needed here.
 
-    // Read existing content or start with an empty document if file doesn't exist or is empty
-    let content = fs::read_to_string(&user_config_path).unwrap_or_default();
-    debug!("Read existing config content (length: {} bytes)", content.len());
+    let content = fs::read_to_string(&app_config_path).unwrap_or_default();
+    debug!("Read existing app config content (length: {} bytes)", content.len());
 
-    // Parse the TOML content into an editable document
     let mut doc = content.parse::<DocumentMut>().map_err(|e| {
-        error!("Failed to parse existing user config TOML at {:?}: {}", user_config_path, e);
-        // Use Message variant instead of Custom
+        error!("Failed to parse existing app config TOML at {:?}: {}", app_config_path, e);
         ConfigError::Config(RsConfigError::Message(format!(
-            "Invalid user TOML format in {:?}: {}", user_config_path, e
+            "Invalid app TOML format in {:?}: {}", app_config_path, e
         )))
     })?;
-    debug!("Successfully parsed user config into editable document.");
+    debug!("Successfully parsed app config into editable document.");
 
-    // Expect values_to_save to be a JSON object
     if let JsonValue::Object(map) = values_to_save {
         info!("Processing {} key-value pairs to save.", map.len());
         for (key, json_value) in map {
             debug!("Processing key: '{}', value: {:?}", key, json_value);
-            // Convert JSON value to TOML Item using the updated helper
             let toml_item = json_to_toml_value(&json_value)?;
-
-            // Assign the Item directly. This is correct.
             doc[key.as_str()] = toml_item;
             debug!("Set key '{}' in TOML document.", key);
-
-            // Note: The refined logic for nested keys (using split('.')) is omitted
-            // here as per the instruction to stick with the simple flat key insertion for now.
         }
     } else {
-        error!("Invalid payload provided to save_user_config_values: Expected a JSON object, got {:?}", values_to_save);
-        // Use Message variant instead of Custom
+        warn!("`values_to_save` was not a JSON object. No values will be saved.");
         return Err(ConfigError::Config(RsConfigError::Message(
-            "Invalid payload: Expected a JSON object.".to_string(),
+            "Invalid input: values_to_save must be a JSON object.".to_string(),
         )));
     }
 
-    // Write the modified document back to the file atomically (if possible, fs::write attempts this)
-    let new_content = doc.to_string();
-    debug!("Writing updated TOML content (length: {} bytes) to {:?}", new_content.len(), user_config_path);
-    fs::write(&user_config_path, new_content).map_err(|e| {
-        error!("Failed to write updated user config file {:?}: {}", user_config_path, e);
-        // Map I/O error using #[from]
+    fs::write(&app_config_path, doc.to_string()).map_err(|e| {
+        error!("Failed to write updated TOML to {:?}: {}", app_config_path, e);
         ConfigError::IoError(e)
     })?;
 
-    info!("Successfully saved configuration values to {:?}", user_config_path);
+    info!("Successfully saved updated configuration to {:?}.", app_config_path);
     Ok(())
 }
 

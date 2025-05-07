@@ -1,5 +1,15 @@
 mod error; // Add this line to declare the error module
 
+/// Request body for the temporary translation test endpoint.
+#[derive(Deserialize, Debug)]
+pub struct TestTranslateRequest { // Made pub for potential use in handler module
+    pub text: String,
+    pub target_language: String,
+    pub source_language: Option<String>,
+    // Optional: Add a field to specify provider if needed for more advanced testing later
+    // pub provider: Option<String>,
+}
+
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -36,6 +46,7 @@ use elfradio_types::UpdateConfigRequest; // Import UpdateConfigRequest
 use elfradio_config::{save_user_config_values, ConfigError as ElfConfigError}; // Import save function and ConfigError
 use crate::error::ApiError; // Use local ApiError
 use serde_json::Value as JsonValue; // Ensure this import is present
+use elfradio_types::{AiError as ElfAiError, AuxServiceClient}; // Import AuxServiceClient and aliased AiError from types
 
 /// API 服务器的主入口函数。
 ///
@@ -104,12 +115,13 @@ pub async fn run_server(
     let app = Router::new()
         .route("/api/health", get(health_check_handler))
         .route("/ws", get(websocket_handler)) // WebSocket 路由
-        .route("/api/tasks/:task_id/export", get(export_task_data_handler))
+        .route("/api/tasks/{task_id}/export", get(export_task_data_handler))
         .route("/api/send_text", post(send_text_handler)) // Add the new route
         .route("/api/start_task", post(start_task_handler)) // 添加 /api/start_task 路由
         .route("/api/stop_task", post(stop_task_handler)) // 添加 /api/stop_task 路由
         .route("/api/config", get(get_config_handler))
         .route("/api/config/update", post(update_config_handler)) // Add the new route for updating configuration
+        .route("/api/test/translate", post(test_translate_handler)) // Add the new route for testing translation
         .with_state(app_state) // Pass only AppState
         .layer(cors); // 应用 CORS 中间件
 
@@ -534,10 +546,7 @@ pub async fn update_config_handler(
     info!("Received request to update configuration with {} keys.", payload.updates.len());
     debug!("Payload: {:?}", payload);
 
-    // Use the imported alias JsonValue or explicit type serde_json::Value
     let values_to_save = JsonValue::Object(payload.updates.into_iter().collect());
-    // Alternative:
-    // let values_to_save = serde_json::Value::Object(payload.updates.into_iter().collect());
 
     match save_user_config_values(values_to_save) {
         Ok(_) => {
@@ -547,20 +556,18 @@ pub async fn update_config_handler(
         Err(config_err) => {
             error!("Failed to save configuration via API: {}", config_err);
             match config_err {
-                ElfConfigError::IoError(_) => Err(ApiError::InternalServerError(format!(
-                    "Failed to write configuration file: {}",
-                    config_err
+                ElfConfigError::IoError(io_err) => Err(ApiError::InternalServerError(format!(
+                    "Failed to write or access configuration file/directory: {}",
+                    io_err
                 ))),
                 ElfConfigError::Config(rs_err) => {
                      if rs_err.to_string().contains("Invalid user TOML format") {
-                          // Ensure ApiError::BadRequest exists in error.rs
-                          Err(ApiError::BadRequest(format!( // Using BadRequest variant
+                          Err(ApiError::BadRequest(format!(
                                "Failed to save: Invalid existing config format. Please check/reset config file. Error: {}",
                                rs_err
                           )))
                      } else if rs_err.to_string().contains("Expected a JSON object") {
-                           // Ensure ApiError::BadRequest exists in error.rs
-                           Err(ApiError::BadRequest(format!( // Using BadRequest variant
+                           Err(ApiError::BadRequest(format!(
                                "Internal error creating save data: {}",
                                rs_err
                           )))
@@ -572,11 +579,52 @@ pub async fn update_config_handler(
                            )))
                      }
                 },
-                ElfConfigError::DirectoryError => Err(ApiError::InternalServerError(format!(
-                    "Failed to access configuration directory: {}",
-                    config_err
-                ))),
             }
         }
+    }
+}
+
+/// Temporary handler for testing the translation service.
+pub async fn test_translate_handler(
+    State(app_state): State<Arc<AppState>>,
+    Json(payload): Json<TestTranslateRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    info!("Received request for /api/test/translate");
+    debug!("Test translate payload: text='{}', target='{}', source='{:?}'",
+           payload.text, payload.target_language, payload.source_language);
+
+    let aux_client_guard = app_state.aux_client.read().await;
+
+    if let Some(client) = aux_client_guard.as_ref() {
+        match client.translate(
+            &payload.text,
+            &payload.target_language,
+            payload.source_language.as_deref()
+        ).await {
+            Ok(translated_text) => {
+                info!("Test translation successful.");
+                Ok(Json(json!({ "translated_text": translated_text })))
+            }
+            Err(elf_ai_error) => { // elfradio_types::AiError
+                error!("Test translation failed: {:?}", elf_ai_error);
+                // Map elfradio_types::AiError to crate::error::ApiError
+                match elf_ai_error {
+                    ElfAiError::NotSupported(msg) => Err(ApiError::BadRequest(format!("Translation not supported by configured provider: {}", msg))),
+                    ElfAiError::AuthenticationError(msg) => Err(ApiError::Unauthorized(msg)),
+                    ElfAiError::ApiError { status, message } => Err(ApiError::BadGateway(status, message)),
+                    ElfAiError::RequestError(msg) => Err(ApiError::InternalServerError(format!("Translation request failed (RequestError): {}", msg))),
+                    ElfAiError::ResponseParseError(msg) => Err(ApiError::BadGateway(502, format!("Failed to parse upstream response: {}", msg))),
+                    ElfAiError::Config(msg) => Err(ApiError::InternalServerError(format!("Auxiliary client configuration error: {}", msg))),
+                    ElfAiError::ClientError(msg) => Err(ApiError::InternalServerError(format!("Auxiliary client internal error: {}", msg))),
+                    // Handle other ElfAiError variants as needed, mapping them to appropriate ApiError variants
+                    // For example, ProviderNotSpecified might map to ServiceUnavailable or a specific config error
+                    ElfAiError::ProviderNotSpecified => Err(ApiError::ServiceUnavailable("Auxiliary service provider not specified.".to_string())),
+                    _ => Err(ApiError::InternalServerError(format!("Translation failed due to an unexpected AI error: {}", elf_ai_error))),
+                }
+            }
+        }
+    } else {
+        warn!("Auxiliary service client is not available/configured for translation test.");
+        Err(ApiError::ServiceUnavailable("Auxiliary service (for translation) is not configured or available.".to_string()))
     }
 }
