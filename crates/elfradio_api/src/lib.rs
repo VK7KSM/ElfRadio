@@ -1,4 +1,5 @@
 mod error; // Add this line to declare the error module
+mod test_handlers; // ADD THIS LINE to declare the new handlers module
 
 /// Request body for the temporary translation test endpoint.
 #[derive(Deserialize, Debug)]
@@ -43,10 +44,13 @@ use std::path::PathBuf;
 use serde_json::json; // 确保 json 宏已导入
 use elfradio_types::{Config, LogEntry, WebSocketMessage, FrontendConfig}; // Import necessary types: LogEntry, TaskMode, WebSocketMessage, FrontendConfig
 use elfradio_types::UpdateConfigRequest; // Import UpdateConfigRequest
+use elfradio_types::TestLlmRequest; // Import the request struct from elfradio_types
 use elfradio_config::{save_user_config_values, ConfigError as ElfConfigError}; // Import save function and ConfigError
 use crate::error::ApiError; // Use local ApiError
 use serde_json::Value as JsonValue; // Ensure this import is present
 use elfradio_types::{AiError as ElfAiError, AuxServiceClient}; // Import AuxServiceClient and aliased AiError from types
+use elfradio_ai::AiClient; // CRITICAL: Import AiClient trait from elfradio_ai
+use elfradio_types::{TestTtsRequest, TestSttRequest}; // ADD THESE LINES for the new request types from elfradio_types
 
 /// API 服务器的主入口函数。
 ///
@@ -122,6 +126,9 @@ pub async fn run_server(
         .route("/api/config", get(get_config_handler))
         .route("/api/config/update", post(update_config_handler)) // Add the new route for updating configuration
         .route("/api/test/translate", post(test_translate_handler)) // Add the new route for testing translation
+        .route("/api/test/llm", post(test_llm_handler)) // Add the new LLM test route
+        .route("/api/test/tts", post(test_handlers::test_tts_handler)) // ADD THESE TWO NEW ROUTES for TTS and STT testing
+        .route("/api/test/stt", post(test_handlers::test_stt_handler))
         .with_state(app_state) // Pass only AppState
         .layer(cors); // 应用 CORS 中间件
 
@@ -626,5 +633,48 @@ pub async fn test_translate_handler(
     } else {
         warn!("Auxiliary service client is not available/configured for translation test.");
         Err(ApiError::ServiceUnavailable("Auxiliary service (for translation) is not configured or available.".to_string()))
+    }
+}
+
+/// Handler skeleton for testing the LLM service via /api/test/llm.
+pub async fn test_llm_handler(
+    State(app_state): State<Arc<AppState>>,
+    Json(payload): Json<TestLlmRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    info!("Received request for /api/test/llm (handler skeleton)");
+    debug!("LLM Test Payload messages count: {}", payload.messages.len());
+    if let Some(params) = &payload.params {
+        debug!("LLM Test Payload params: {:?}", params);
+    }
+
+    // 1. Get a read lock on the ai_client Option within AppState
+    let ai_client_guard = app_state.ai_client.read().await;
+
+    // 2. Check if the client Option contains a client Arc
+    if let Some(llm_client_arc) = ai_client_guard.as_ref() {
+        // Client exists, we have an Arc<dyn AiClient + Send + Sync>
+        // We can clone the Arc if we need to pass it to another async task,
+        // or use it directly here.
+        // let client_to_use = Arc::clone(llm_client_arc); // Example if needed elsewhere
+
+        debug!("LLM client (ai_client) successfully retrieved from AppState.");
+
+        // TODO for next step:
+        // Call llm_client_arc.chat_completion(payload.messages, &chat_params).await
+
+        // For now, keep the placeholder success response
+        let response_data = json!({
+            "status": "success",
+            "message": "LLM client (ai_client) retrieved. Actual LLM call not yet implemented.",
+            "received_messages_count": payload.messages.len()
+        });
+        Ok(Json(response_data))
+
+    } else {
+        // LLM client is None (not configured or failed to initialize)
+        error!("LLM client (ai_client) is not available in AppState for /api/test/llm.");
+        Err(ApiError::ServiceUnavailable(
+            "LLM client not initialized or not configured. Check server logs and AI settings.".to_string(),
+        ))
     }
 }

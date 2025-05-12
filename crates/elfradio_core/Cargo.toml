@@ -21,6 +21,7 @@ anyhow = { workspace = true }
 sqlx = { workspace = true }
 cpal = "0.15.3"
 elfradio_db = { workspace = true }
+rubato = "0.16.2"
 
 [dev-dependencies]
 tokio = { workspace = true }

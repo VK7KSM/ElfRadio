@@ -141,7 +141,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // --- Initialize AI Client (moved after channel/db creation) ---
-    info!("Initializing AI Client...");
+     info!("Initializing AI Client...");
     let ai_client_result = create_ai_client(&config).await; // Pass the whole config
 
     // --- Initialize Auxiliary Client ---
@@ -165,7 +165,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // --- Instantiate AppState (moved after channel/db/ai creation) ---
-    info!("Initializing AppState...");
+     info!("Initializing AppState...");
     let app_state = Arc::new(AppState::new(
         Arc::new(config.clone()),
         tx_sender,

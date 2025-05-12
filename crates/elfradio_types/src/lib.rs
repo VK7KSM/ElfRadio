@@ -165,6 +165,8 @@ pub struct AliyunAuxCredentials {
     pub access_key_id: Option<String>,
     #[serde(default)]
     pub access_key_secret: Option<String>,
+    #[serde(default)]
+    pub app_key: Option<String>,
     // Add region_id etc. if needed by the client later
 }
 
@@ -769,4 +771,54 @@ pub trait AuxServiceClient: Send + Sync {
     /// A `Result` containing the transcribed text as a `String` on success,
     /// or an `AiError` on failure.
     async fn speech_to_text(&self, audio_data: &[u8], sample_rate_hertz: u32, language_code: &str) -> Result<String, AiError>;
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)] // Added PartialEq, Eq for potential use in tests
+pub struct ChatMessage {
+    pub role: String, // e.g., "user", "assistant", "system"
+    pub content: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)] // Added PartialEq, Default
+pub struct ChatParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+    // Add other common LLM parameters as needed, ensuring they are optional
+}
+
+/// Request body for the /api/test/llm endpoint.
+#[derive(Deserialize, Debug, Clone)] // Added Clone
+pub struct TestLlmRequest {
+    pub messages: Vec<ChatMessage>,
+    #[serde(default)] // Use default for Option<ChatParams> if not provided
+    pub params: Option<ChatParams>,
+}
+
+// --- Test API Request Structs ---
+
+/// Request body for the TTS test endpoint.
+#[derive(Deserialize, Debug, Clone)]
+pub struct TestTtsRequest {
+    pub text: String,
+    pub language_code: String, // e.g., "zh-CN", "en-US"
+    pub voice_name: Option<String>, // e.g., "Aiyue"
+}
+
+/// Request body for the STT test endpoint.
+#[derive(Deserialize, Debug, Clone)]
+pub struct TestSttRequest {
+    /// Base64 encoded audio data.
+    pub audio_base64: String,
+    /// Sample rate of the audio in Hertz (e.g., 16000).
+    pub sample_rate_hertz: u32,
+    /// Language code for STT (e.g., "zh-CN", "en-US").
+    pub language_code: String,
 }

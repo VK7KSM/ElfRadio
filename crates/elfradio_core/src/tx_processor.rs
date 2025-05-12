@@ -6,6 +6,7 @@ use elfradio_types::{
     TxItem, PttSignal, AiConfig, AiProvider,
     LogEntry, LogDirection, LogContentType,
     TaskInfo, // 新增导入 TaskInfo
+    AuxServiceProvider, AiError, // ADDED AiError for mapping
 };
 use elfradio_ai::TtsParams; // Removed AiError
 use elfradio_hardware;
@@ -23,6 +24,7 @@ use chrono::Utc;
 use crate::logging;
 use std::path::{Path, PathBuf};
 use elfradio_db::insert_log_entry;
+use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction, ResampleError};
 
 // Define a specific Result type alias for this module
 type TxProcessingOutcome<T> = std::result::Result<T, CoreError>;
@@ -199,46 +201,113 @@ async fn process_tx_item(
 
 /// Decodes WAV audio data (bytes) into a vector of f32 samples.
 pub fn decode_wav_data(wav_data: &[u8]) -> TxProcessingOutcome<(Vec<f32>, WavSpec)> {
-    let cursor = Cursor::new(wav_data);
-    let mut reader = hound::WavReader::new(cursor).map_err(CoreError::AudioDecodeError)?;
+    // 首先记录尝试解码的音频数据长度
+    debug!("Attempting to decode WAV data of length: {} bytes", wav_data.len());
+
+    // 修改 WavReader 创建的错误处理，使用 {:?} 打印错误的 Debug 表示
+    let mut reader = match hound::WavReader::new(Cursor::new(wav_data)) {
+        Ok(r) => r,
+        Err(e) => {
+            let snippet_len = std::cmp::min(wav_data.len(), 64); // 记录前64个字节
+            let snippet = &wav_data[..snippet_len];
+            error!(
+                "Hound: 无法读取 WAV 头部。错误详情: {:?}. 原始音频字节片段 (前 {} 字节): {:02X?}",
+                e, snippet_len, snippet
+            );
+            return Err(CoreError::AudioDecodeError(e)); // 直接传递 HoundError
+        }
+    };
+
     let spec = reader.spec();
 
-    // Validate Spec if necessary (e.g., check sample rate, channels)
+    // 验证音频规格
     if spec.channels != 1 {
-        warn!("Expected mono audio for decoding, got {} channels. Will attempt to process first channel.", spec.channels);
-        // Or return Err(CoreError::AudioDecodeError(HoundError::Unsupported)) if strict mono is required
+        warn!("期望单声道音频，但收到 {} 个声道。将尝试处理第一个声道。", spec.channels);
     }
 
     let samples_f32: Vec<f32> = match spec.sample_format {
         hound::SampleFormat::Int => {
-            // Read samples based on bits_per_sample
             match spec.bits_per_sample {
-                16 => reader
+                16 => {
+                    match reader
                     .samples::<i16>()
                     .map(|s| s.map(|sample| sample as f32 / i16::MAX as f32))
-                    .collect::<Result<Vec<_>, _>>()?,
-                8 => reader // Hound reads 8-bit PCM as u8
-                    .samples::<i8>() // Read as i8 assuming hound handles the unsigned->signed mapping
-                    .map(|s| s.map(|sample| sample as f32 / i8::MAX as f32)) // Normalize i8
-                    .collect::<Result<Vec<_>, _>>()?,
+                        .collect::<Result<Vec<_>, _>>()
+                    {
+                        Ok(samples) => samples,
+                        Err(e) => {
+                            let snippet_len = std::cmp::min(wav_data.len(), 64);
+                            let snippet = &wav_data[..snippet_len];
+                            error!(
+                                "Hound: 无法读取 i16 WAV 采样。错误详情: {:?}. 原始音频字节片段 (前 {} 字节): {:02X?}",
+                                e, snippet_len, snippet
+                            );
+                            return Err(CoreError::AudioDecodeError(e)); // 直接传递 HoundError
+                        }
+                    }
+                },
+                8 => {
+                    match reader
+                        .samples::<i8>()
+                        .map(|s| s.map(|sample| sample as f32 / i8::MAX as f32))
+                        .collect::<Result<Vec<_>, _>>()
+                    {
+                        Ok(samples) => samples,
+                        Err(e) => {
+                            let snippet_len = std::cmp::min(wav_data.len(), 64);
+                            let snippet = &wav_data[..snippet_len];
+                            error!(
+                                "Hound: 无法读取 i8 WAV 采样。错误详情: {:?}. 原始音频字节片段 (前 {} 字节): {:02X?}",
+                                e, snippet_len, snippet
+                            );
+                            return Err(CoreError::AudioDecodeError(e)); // 直接传递 HoundError
+                        }
+                    }
+                },
                 24 => {
-                     error!("24-bit WAV decoding not implemented yet in decode_wav_data.");
+                    error!("24位 WAV 解码尚未在 decode_wav_data 中实现。");
                      return Err(CoreError::AudioDecodeError(HoundError::Unsupported));
-                }
-                 32 => reader
+                },
+                32 => {
+                    match reader
                     .samples::<i32>()
                     .map(|s| s.map(|sample| sample as f32 / i32::MAX as f32))
-                    .collect::<Result<Vec<_>, _>>()?,
+                        .collect::<Result<Vec<_>, _>>()
+                    {
+                        Ok(samples) => samples,
+                        Err(e) => {
+                            let snippet_len = std::cmp::min(wav_data.len(), 64);
+                            let snippet = &wav_data[..snippet_len];
+                            error!(
+                                "Hound: 无法读取 i32 WAV 采样。错误详情: {:?}. 原始音频字节片段 (前 {} 字节): {:02X?}",
+                                e, snippet_len, snippet
+                            );
+                            return Err(CoreError::AudioDecodeError(e)); // 直接传递 HoundError
+                        }
+                    }
+                },
                 _ => {
+                    error!("不支持的位深度: {} 位", spec.bits_per_sample);
                     return Err(CoreError::AudioDecodeError(HoundError::Unsupported));
                 }
             }
-        }
+        },
         hound::SampleFormat::Float => {
-             // Hound reads 32-bit float samples directly as f32
             if spec.bits_per_sample == 32 {
-                reader.samples::<f32>().collect::<Result<Vec<_>, _>>()?
+                match reader.samples::<f32>().collect::<Result<Vec<_>, _>>() {
+                    Ok(samples) => samples,
+                    Err(e) => {
+                        let snippet_len = std::cmp::min(wav_data.len(), 64);
+                        let snippet = &wav_data[..snippet_len];
+                        error!(
+                            "Hound: 无法读取 f32 WAV 采样。错误详情: {:?}. 原始音频字节片段 (前 {} 字节): {:02X?}",
+                            e, snippet_len, snippet
+                        );
+                        return Err(CoreError::AudioDecodeError(e)); // 直接传递 HoundError
+                    }
+                }
             } else {
+                error!("不支持的浮点位深度: {} 位", spec.bits_per_sample);
                  return Err(CoreError::AudioDecodeError(HoundError::Unsupported));
             }
         }
@@ -401,36 +470,440 @@ pub async fn queue_text_for_transmission(
             debug!(task_id = %task_id, "SendText log entry inserted into database.");
         }
 
-        let tts_params = construct_tts_params(&app_state.config.ai_settings);
-        debug!("Constructed TTS Params: {:?}", tts_params);
+        // --- Determine TTS parameters (language_code, voice_name) for AuxServiceClient ---
+        let lang_code_str: String;
+        let voice_name_opt: Option<String>;
 
-        // 获取 Option<Arc<dyn AiClient...>> 的读锁
-        let ai_client_guard = app_state.ai_client.read().await;
+        // Borrow aux_service_settings from the app_state config
+        let aux_provider_cfg = &app_state.config.aux_service_settings; // This is &AuxServiceConfig
 
-        let audio_bytes = if let Some(client) = ai_client_guard.as_ref() {
-            // 如果客户端存在，调用其方法
-            client.text_to_speech(&text_to_speak, &tts_params).await.map_err(|e| {
-                error!(item_id = %task_id, task_id=%task_id, "TTS request failed: {:?}", e);
-                CoreError::AiRequestFailed(format!("TTS failed: {}", e)) // 将 AiError 映射到 CoreError
-            })?
-        } else {
-            // 如果客户端为 None（未配置），返回新的特定错误
-            warn!(item_id = %task_id, task_id=%task_id, "Attempted to call TTS in process_tx_item, but AI provider is not configured.");
-            return Err(CoreError::AiNotConfigured); // 使用新的专用错误类型
-        };
+        match aux_provider_cfg.provider.as_ref() {
+            Some(elfradio_types::AuxServiceProvider::Google) => {
+                let google_aux_params_cfg = &aux_provider_cfg.google; // This is &GoogleAuxConfig, which is part of AuxServiceConfig
+                voice_name_opt = google_aux_params_cfg.tts_voice.clone();
+                // Infer language from tts_voice (e.g., "en-US-Wavenet-D" -> "en-US")
+                // Fallback to stt_language from the same GoogleAuxConfig, then a hardcoded default.
+                lang_code_str = voice_name_opt.as_ref()
+                    .and_then(|v_name| {
+                        // Attempt to extract language part like "en-US" from "en-US-Wavenet-D"
+                        let parts: Vec<&str> = v_name.splitn(3, '-').take(2).collect();
+                        if parts.len() == 2 {
+                            Some(parts.join("-"))
+                        } else {
+                            None // Could not reliably extract language from voice name
+                        }
+                    })
+                    .filter(|s: &String| !s.is_empty())
+                    .or_else(|| google_aux_params_cfg.stt_language.clone()) // stt_language is also Option<String>
+                    .unwrap_or_else(|| {
+                        warn!(task_id = %task_id, "Google Aux TTS: language_code could not be determined from tts_voice ('{:?}') or stt_language ('{:?}') in aux_service_settings.google. Defaulting to 'en-US'.", voice_name_opt, google_aux_params_cfg.stt_language);
+                        "en-US".to_string()
+                    });
+                if voice_name_opt.is_none() {
+                    warn!(task_id = %task_id, "Google Aux TTS: voice_name not configured in aux_service_settings.google.tts_voice. Aux client will use its default for lang '{}'.", lang_code_str);
+                }
+                info!(task_id = %task_id, "Using Google Aux TTS: lang_code='{}', voice_name='{:?}'", lang_code_str, voice_name_opt);
+            }
+            Some(elfradio_types::AuxServiceProvider::Aliyun) => {
+                // For Aliyun, 'Aiyue' is the default voice.
+                // The language_code for Aliyun text_to_speech is passed to the client method.
+                voice_name_opt = Some("Aiyue".to_string()); // Assuming this is the desired default for Aliyun
+                lang_code_str = "zh-CN".to_string(); // Default language for "Aiyue" or as per Aliyun's expectation for this voice.
+                                                     // You might want to get this from aliyun_config if it's configurable:
+                                                     // lang_code_str = aux_provider_cfg.aliyun.language_code.clone().unwrap_or_else(|| "zh-CN".to_string());
+                info!(task_id = %task_id, "Using Aliyun Aux TTS: lang_code='{}', voice_name='{:?}'", lang_code_str, voice_name_opt);
+            }
+            // TODO: Add cases for AuxServiceProvider::Baidu when implemented
+            None | Some(_) => { // Handles Baidu (unimplemented) and None provider cases
+                let provider_display_name = match aux_provider_cfg.provider.as_ref() {
+                    Some(p_val) => format!("{:?}", p_val), // Use format! to get String
+                    None => "None".to_string(),
+                };
+                warn!(task_id = %task_id, "Auxiliary TTS provider is {} or not fully supported for parameter extraction. Defaulting TTS params to en-US, no specific voice.", provider_display_name);
+                lang_code_str = "en-US".to_string();
+                voice_name_opt = None;
+            }
+        }
+        debug!(task_id = %task_id, "Determined TTS params: lang_code_str='{}', voice_name_opt='{:?}'", lang_code_str, voice_name_opt);
+        // --- End: New TTS Parameter Determination Logic ---
         
-        let (audio_f32, _wav_spec): (Vec<f32>, WavSpec) = decode_wav_data(&audio_bytes)?;
-        debug!("Decoded WAV data, samples count: {}", audio_f32.len());
+        // --- Call AuxServiceClient for TTS ---
+        // Create &str references from the determined String/Option<String> parameters
+        let lang_code_ref: &str = &lang_code_str;
+        let voice_name_ref: Option<&str> = voice_name_opt.as_deref();
 
-        let sample_rate = app_state.config.hardware.input_sample_rate;
-        debug!("Using sample rate: {}", sample_rate);
+        debug!(task_id = %task_id, "Attempting TTS via aux_client with lang_code: '{}', voice_name: {:?}", lang_code_ref, voice_name_ref);
 
-        let filename = format!("{}.wav", Uuid::new_v4());
+        let audio_bytes: Vec<u8>; // Declare audio_bytes to store the result
+
+        // Acquire a read lock on app_state.aux_client
+        let aux_client_guard = app_state.aux_client.read().await;
+
+        if let Some(client) = aux_client_guard.as_ref() {
+            // Call text_to_speech on the AuxServiceClient instance
+            match client.text_to_speech(&text_to_speak, lang_code_ref, voice_name_ref).await {
+                Ok(bytes) => {
+                    audio_bytes = bytes;
+                    info!(task_id = %task_id, "TTS call successful via aux_client, received {} audio bytes.", audio_bytes.len());
+                }
+                Err(ai_error) => {
+                    error!(task_id = %task_id, "TTS conversion failed via aux_client: {:?}", ai_error);
+                    // Propagate AiError, which will be converted to CoreError::AiError by `?` or explicit `From`
+                    return Err(CoreError::from(ai_error)); 
+                }
+            }
+        } else {
+            error!(task_id = %task_id, "TTS failed: Auxiliary service (aux_client) is not configured.");
+            // Use the CoreError::AuxServiceNotConfigured variant added in Step 1
+            return Err(CoreError::AuxServiceNotConfigured(
+                "TTS service is not available because no auxiliary service provider is configured in aux_service_settings.".to_string()
+            ));
+        }
+        // `aux_client_guard` is dropped here, releasing the read lock.
+        // --- End: TTS Call Logic ---
+
+        // 声明处理后的音频数据和WAV规格
+        let audio_f32: Vec<f32>;
+        let mut wav_spec_for_saving: WavSpec;
+
+        // --- 根据不同的辅助服务提供商处理音频数据 ---
+        if app_state.config.aux_service_settings.provider == Some(elfradio_types::AuxServiceProvider::Aliyun) {
+            info!(
+                task_id = %task_id,
+                "Processing raw PCM audio data ({} bytes) from Aliyun TTS...",
+                audio_bytes.len()
+            );
+
+            // --- 保存原始 Aliyun PCM 字节数据 (扩展名 .pcm) ---
+            let raw_filename = format!("raw_aliyun_tts_{}.pcm", Uuid::new_v4());
+            let raw_audio_file_path = task_dir.join(&raw_filename);
+            
+            match tokio::fs::write(&raw_audio_file_path, &audio_bytes).await {
+                Ok(_) => {
+                    info!(
+                        task_id = %task_id,
+                        "Successfully saved raw Aliyun PCM bytes ({} bytes) to {:?}",
+                        audio_bytes.len(),
+                        raw_audio_file_path
+                    );
+                    
+                    // 记录原始PCM文件到数据库
+                    let raw_audio_entry = LogEntry {
+                        timestamp: Utc::now(),
+                        direction: LogDirection::Outgoing,
+                        content_type: LogContentType::Audio,
+                        content: format!("Raw PCM audio: {}", raw_filename),
+                    };
+                    if let Err(e) = insert_log_entry(db_pool, task_id, &raw_audio_entry).await {
+                        error!(
+                            task_id = %task_id,
+                            "Failed to insert raw PCM audio log entry: {:?}",
+                            e
+                        );
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        task_id = %task_id,
+                        "Failed to save raw Aliyun PCM bytes to {:?}: {}",
+                        raw_audio_file_path,
+                        e
+                    );
+                    // 不返回错误，继续处理
+                }
+            }
+
+            // --- 将原始 PCM (Vec<u8>) 转换为 Vec<f32> ---
+            // 确保字节长度是偶数（处理16位样本）
+            if audio_bytes.len() % 2 != 0 {
+                let error_message = format!(
+                    "Invalid PCM data length from Aliyun for i16 conversion: {} bytes (expected even number)", 
+                    audio_bytes.len()
+                );
+                error!(
+                    task_id = %task_id,
+                    "Aliyun PCM data has odd length ({}), cannot convert to i16 samples.",
+                    audio_bytes.len()
+                );
+                return Err(CoreError::AudioError(error_message));
+            }
+
+            // 将字节按照16位有符号整数（小端序）处理并归一化为f32
+            audio_f32 = audio_bytes
+                .chunks_exact(2)
+                .map(|chunk| {
+                    let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
+                    sample as f32 / i16::MAX as f32
+                })
+                .collect();
+
+            // 创建用于保存的 WavSpec
+            wav_spec_for_saving = WavSpec {
+                channels: 1,
+                sample_rate: 16000, // 假定Aliyun PCM采样率为16kHz
+                bits_per_sample: 16,
+                sample_format: SampleFormat::Int,
+            };
+
+            info!(
+                task_id = %task_id,
+                "Converted Aliyun PCM ({} bytes) to {} f32 samples. Assumed spec for saving: {:?}",
+                audio_bytes.len(),
+                audio_f32.len(),
+                wav_spec_for_saving
+            );
+        } else {
+            // 对于Google或其他返回完整WAV的提供商
+            info!(
+                task_id = %task_id,
+                "Attempting to decode WAV data ({} bytes) obtained from TTS (e.g., Google)...",
+                audio_bytes.len()
+            );
+
+            // 记录音频字节的前几个字节用于调试
+            let snippet_len = std::cmp::min(audio_bytes.len(), 32);
+            debug!(
+                task_id = %task_id,
+                "Audio bytes snippet (first {} bytes): {:?}",
+                snippet_len,
+                &audio_bytes[..snippet_len]
+            );
+            
+            // 使用现有的 decode_wav_data 函数来处理WAV格式
+            let (decoded_f32_samples, original_wav_spec) = match decode_wav_data(&audio_bytes) {
+                Ok(result) => result,
+                Err(e) => {
+                    error!(
+                        task_id = %task_id,
+                        "Audio decoding error after TTS: {:?}. Full audio_bytes length: {}",
+                        e,
+                        audio_bytes.len()
+                    );
+                    return Err(e);
+                }
+            };
+
+            debug!(
+                task_id = %task_id,
+                "Decoded WAV data, f32 samples count: {}, original spec: {:?}",
+                decoded_f32_samples.len(),
+                original_wav_spec
+            );
+
+            // --- 开始：重采样逻辑 ---
+            let target_sample_rate = 16000u32;
+            if original_wav_spec.sample_rate != target_sample_rate {
+                info!(
+                    task_id = %task_id,
+                    "Resampling audio from {} Hz to {} Hz...",
+                    original_wav_spec.sample_rate,
+                    target_sample_rate
+                );
+
+                // 检查通道数（预期为单声道）
+                if original_wav_spec.channels != 1 {
+                    warn!(
+                        task_id = %task_id,
+                        "Attempting to resample audio with {} channels. Rubato SincFixedIn expects input as Vec<Vec<f32>> where outer Vec is for channels. Assuming first channel if stereo, or proceed if mono.",
+                        original_wav_spec.channels
+                    );
+                    // 目前，我们假设 audio_f32 已经是单声道，
+                    // 或者如果是立体声，我们在此之前只会使用第一个通道。
+                    // 如果 original_wav_spec.channels > 1，且 audio_f32 包含交错数据，
+                    // 则需要先将其解交错为 Vec<Vec<f32>>。
+                    // 让我们假设 audio_f32 已经是表示单个通道的 Vec<f32>。
+                }
+                let num_channels = 1usize; // 我们处理的是单声道音频
+                
+                // 计算重采样比率
+                let resample_ratio = target_sample_rate as f64 / original_wav_spec.sample_rate as f64;
+                
+                // 定义重采样器的块大小
+                let resampler_chunk_size = 1024; // 重采样器的常见块大小
+                
+                // 创建 SincInterpolationParameters
+                let sinc_params = rubato::SincInterpolationParameters {
+                    sinc_len: 128,
+                    f_cutoff: 0.95,
+                    interpolation: rubato::SincInterpolationType::Linear,
+                    oversampling_factor: 128,
+                    window: rubato::WindowFunction::BlackmanHarris2,
+                };
+                
+                // 创建 SincFixedIn 重采样器实例
+                let mut resampler = match rubato::SincFixedIn::<f32>::new(
+                    resample_ratio,
+                    2.0, // max_resample_ratio_relative（对于降采样，2.0 是安全的）
+                    sinc_params,
+                    resampler_chunk_size, // 这是重采样器期望的输入块大小（以帧为单位）
+                    num_channels,        // 音频通道数
+                ) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        error!(task_id = %task_id, "Failed to create rubato resampler: {:?}", e);
+                        return Err(CoreError::AudioError(format!("Failed to create resampler: {}", e)));
+                    }
+                };
+                
+                // 为重采样后的所有帧准备输出向量
+                let mut all_resampled_frames: Vec<f32> = Vec::with_capacity(
+                    (decoded_f32_samples.len() as f64 * resample_ratio).ceil() as usize
+                );
+                
+                debug!(
+                    task_id = %task_id,
+                    "Resampler initialized. Original frames: {}, Target ratio: {}. Starting corrected chunked processing.",
+                    decoded_f32_samples.len(),
+                    resample_ratio
+                );
+                
+                // --- 开始：修正后的完整片段重采样逻辑 ---
+                let mut input_cursor = 0;
+                // temp_out_buffer 用于单次调用 process_into_buffer
+                let mut temp_out_buffer: Vec<Vec<f32>> = vec![vec![0.0f32; resampler.output_frames_max()]; num_channels];
+
+                // 处理所有完整的块
+                while input_cursor + resampler_chunk_size <= decoded_f32_samples.len() {
+                    let input_chunk_data: Vec<f32> = decoded_f32_samples[input_cursor..input_cursor + resampler_chunk_size].to_vec();
+                    // 为单声道创建包含一个 Vec 的数组
+                    let waves_in_chunk: [Vec<f32>; 1] = [input_chunk_data];
+
+                    match resampler.process_into_buffer(&waves_in_chunk, &mut temp_out_buffer, None) {
+                        Ok((_consumed, produced)) => {
+                            if produced > 0 {
+                                // 从 temp_out_buffer 的第一个通道收集结果
+                                all_resampled_frames.extend_from_slice(&temp_out_buffer[0][..produced]);
+                            }
+                        }
+                        Err(e) => {
+                            error!(task_id=%task_id, "Error during full chunk resampling: {:?}", e);
+                            return Err(CoreError::AudioError(format!("Resampling error: {}", e)));
+                        }
+                    }
+                    input_cursor += resampler_chunk_size;
+                }
+
+                // 处理最后一个（可能不完整的）块，如果还有剩余的实际样本
+                if input_cursor < decoded_f32_samples.len() {
+                    let remaining_input_frames = decoded_f32_samples.len() - input_cursor;
+                    debug!(task_id=%task_id, "Processing last partial chunk of {} frames.", remaining_input_frames);
+                    let mut last_input_chunk_data: Vec<f32> = decoded_f32_samples[input_cursor..].to_vec();
+                    // 用零填充以构成一个完整的块，供 SincFixedIn 处理
+                    last_input_chunk_data.resize(resampler_chunk_size, 0.0f32);
+                    let waves_in_last_chunk: [Vec<f32>; 1] = [last_input_chunk_data];
+
+                    match resampler.process_into_buffer(&waves_in_last_chunk, &mut temp_out_buffer, None) {
+                        Ok((_consumed, produced)) => {
+                            debug!(task_id=%task_id, "Last chunk processed, produced {} frames.", produced);
+                            // 我们只关心由 *实际* 剩余输入产生的帧，而不是由填充产生的。
+                            // `produced` 应该反映了这一点。
+                            if produced > 0 {
+                                all_resampled_frames.extend_from_slice(&temp_out_buffer[0][..produced]);
+                            }
+                        }
+                        Err(e) => {
+                            error!(task_id=%task_id, "Error processing last chunk: {:?}", e);
+                            return Err(CoreError::AudioError(format!("Resampling last chunk error: {}", e)));
+                        }
+                    }
+                }
+
+                // --- 开始：修正后的冲洗重采样器逻辑 ---
+                debug!(task_id = %task_id, "Flushing resampler (refined)...");
+                // 用于冲洗的输入：一个大小符合重采样器预期的填零块。
+                // 注意：SincFixedIn 期望冲洗块也具有与处理时相同的块大小
+                let flush_input_chunk_data: Vec<f32> = vec![0.0f32; resampler_chunk_size];
+                let waves_in_flush_chunk: [Vec<f32>; 1] = [flush_input_chunk_data]; // 单声道
+
+                const MAX_FLUSH_ITERATIONS: usize = 10; // 安全退出：最大冲洗迭代次数
+                let mut flush_iterations = 0;
+                let mut total_flushed_frames_in_this_phase = 0;
+
+                loop {
+                    if flush_iterations >= MAX_FLUSH_ITERATIONS {
+                        warn!(
+                            task_id = %task_id,
+                            "Resampler flushing reached max iterations ({}), breaking loop. Total flushed in this phase: {}",
+                            MAX_FLUSH_ITERATIONS,
+                            total_flushed_frames_in_this_phase
+                        );
+                        break;
+                    }
+
+                    match resampler.process_into_buffer(&waves_in_flush_chunk, &mut temp_out_buffer, None) {
+                        Ok((_input_frames_consumed, output_frames_produced)) => {
+                            if output_frames_produced > 0 {
+                                // 从 temp_out_buffer 的第一个通道收集结果
+                                all_resampled_frames.extend_from_slice(&temp_out_buffer[0][..output_frames_produced]);
+                                total_flushed_frames_in_this_phase += output_frames_produced;
+                                debug!(
+                                    task_id = %task_id,
+                                    "Flushed {} frames from resampler (iteration {}).",
+                                    output_frames_produced,
+                                    flush_iterations + 1
+                                );
+                            } else {
+                                // 没有更多帧被产生，冲洗被认为完成。
+                                debug!(
+                                    task_id = %task_id,
+                                    "Resampler flushing complete (0 frames produced on iteration {}).",
+                                    flush_iterations + 1
+                                );
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            error!(task_id = %task_id, "Error during resampler flush: {:?}", e);
+                            return Err(CoreError::AudioError(format!("Error during resampler flush: {}", e)));
+                        }
+                    }
+                    flush_iterations += 1;
+                }
+                // --- 结束：修正后的冲洗重采样器逻辑 ---
+
+                // --- 使用重采样后的数据更新主要音频变量 ---
+                // 将最终的重采样结果赋值给外部作用域的变量
+                audio_f32 = all_resampled_frames;
+                // 更新 WAV 规格以反映新的采样率
+                // 注意：`wav_spec_for_saving` 在外部声明为 `mut`
+                wav_spec_for_saving = original_wav_spec.clone(); // 克隆原始规格以保留其他信息
+                wav_spec_for_saving.sample_rate = target_sample_rate; // 设置新的采样率
+
+                info!(
+                    task_id = %task_id,
+                    "Resampling and flushing complete. Final audio data for saving/queuing: {} samples at {} Hz",
+                    audio_f32.len(),
+                    wav_spec_for_saving.sample_rate
+                );
+                // --- 结束：更新主要音频变量 ---
+
+            } else { // 如果采样率已经是目标值
+                info!(
+                    task_id = %task_id,
+                    "Audio already at target sample rate of {} Hz. No resampling needed.",
+                    target_sample_rate
+                );
+                // 直接使用原始解码数据和规格
+                audio_f32 = decoded_f32_samples;
+                wav_spec_for_saving = original_wav_spec;
+            }
+            // --- 结束：重采样逻辑（整个 if/else 块） ---
+
+            debug!(
+                task_id = %task_id,
+                "Final audio data ready for saving: {} samples, spec: {:?}",
+                audio_f32.len(),
+                wav_spec_for_saving
+            );
+        }
+
+        // --- 保存处理后的音频为标准WAV文件 ---
+        let filename = format!("processed_tts_{}.wav", Uuid::new_v4());
         let audio_file_path = task_dir.join(&filename);
         
-        match save_wav_file(&audio_file_path, &audio_f32, sample_rate).await {
+        match save_wav_file(&audio_file_path, &audio_f32, wav_spec_for_saving.sample_rate).await {
              Ok(_) => {
-                 info!(task_id = %task_id, "Saved TTS audio to {:?}", audio_file_path);
+                info!(task_id = %task_id, "Successfully saved processed TTS audio as WAV to {:?}", audio_file_path);
                  let audio_entry = LogEntry {
                      timestamp: Utc::now(),
                      direction: LogDirection::Outgoing,
@@ -440,25 +913,26 @@ pub async fn queue_text_for_transmission(
                  if let Err(e) = insert_log_entry(db_pool, task_id, &audio_entry).await {
                      error!(task_id = %task_id, "Failed to insert TTS Audio log entry: {:?}", e);
                  } else {
-                     debug!(task_id = %task_id, "TTS Audio log entry inserted.");
+                    debug!(task_id = %task_id, "TTS Audio log entry inserted into database.");
                  }
              }
              Err(e) => {
-                  error!(task_id = %task_id, "Failed to save TTS audio file: {:?}", e);
+                error!(task_id = %task_id, "Failed to save processed TTS audio as WAV to {:?}: {}", audio_file_path, e);
                   return Err(e);
              }
         }
 
+        // --- 创建 TxItem 并入队 ---
         let tx_item = TxItem::GeneratedVoice {
              id: Uuid::new_v4(),
              audio_data: audio_f32,
-             priority: 5,
+            priority: 5, // Default priority for /api/send_text items
         };
-        debug!("Created TxItem: {:?}", tx_item);
+        debug!(task_id = %task_id, "Created TxItem: {:?}", tx_item);
 
         app_state.tx_queue.send(tx_item)
             .map_err(|e| CoreError::TxQueueSendError(format!("Failed to send to TX queue: {}", e)))?;
-        debug!("Successfully queued TxItem for transmission.");
+        info!(task_id = %task_id, "Successfully queued TxItem for transmission.");
 
         Ok(())
     } else {
@@ -471,12 +945,7 @@ pub async fn queue_text_for_transmission(
 // Utility Functions
 // ----------------------------------------------------------------------------
 
-/// Helper function to get the currently configured active TTS voice ID.
-pub fn get_active_tts_voice(ai_config: &AiConfig) -> String {
-    // Reuses the logic from construct_tts_params to find the voice ID
-    let params = construct_tts_params(ai_config);
-    params.voice_id
-}
+// The get_active_tts_voice function was here.
 
 // 添加辅助函数用于保存 WAV 文件
 #[instrument(skip(path, samples))]

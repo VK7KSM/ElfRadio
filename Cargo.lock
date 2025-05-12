@@ -1155,7 +1155,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.21.7",
  "chrono",
+ "elfradio_ai",
  "elfradio_config",
  "elfradio_core",
  "elfradio_db",
@@ -1251,6 +1253,7 @@ dependencies = [
  "elfradio_hardware",
  "elfradio_types",
  "hound",
+ "rubato",
  "serde_json",
  "sqlx",
  "tempfile",
@@ -3279,6 +3282,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "realfft"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "390252372b7f2aac8360fc5e72eba10136b166d6faeed97e6d0c8324eb99b2b1"
+dependencies = [
+ "rustfft",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3486,6 +3498,18 @@ dependencies = [
  "image",
  "num-complex",
  "simple-plot",
+]
+
+[[package]]
+name = "rubato"
+version = "0.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5258099699851cfd0082aeb645feb9c084d9a5e1f1b8d5372086b989fc5e56a1"
+dependencies = [
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "realfft",
 ]
 
 [[package]]

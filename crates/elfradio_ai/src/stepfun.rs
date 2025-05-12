@@ -5,12 +5,10 @@ use reqwest::Client;
 use reqwest::header;
 use serde::Serialize;
 use tracing::{debug, error, warn, instrument};
-use crate::{AiError, TtsParams};
-use elfradio_types::StepFunTtsConfig;
+use elfradio_types::{ChatMessage, ChatParams, AiError, StepFunTtsConfig};
+use crate::{AiClient, SttParams, TtsParams};
 use std::sync::Arc;
 use elfradio_config::get_user_config_value;
-
-use super::{AiClient, ChatMessage, ChatParams, SttParams};
 
 #[allow(dead_code)]
 const STEPFUN_TTS_API_URL: &str = "https://api.stepfun.com/v1/audio/speech";

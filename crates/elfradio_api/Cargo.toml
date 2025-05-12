@@ -21,3 +21,5 @@ chrono = { workspace = true }
 elfradio_db = { workspace = true }
 sqlx = { workspace = true }
 elfradio_config = { workspace = true }
+elfradio_ai = { path = "../elfradio_ai" }
+base64 = "0.21"

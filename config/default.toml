@@ -45,7 +45,13 @@ max_tokens = 1024
 [aux_service_settings]
 # provider = "Aliyun" # Example: Set default aux provider if needed
 # [aux_service_settings.google] # Structure placeholder, keys loaded from user config
-# [aux_service_settings.aliyun] # Structure placeholder, keys loaded from user config
+
+# 修改下方：取消注释并添加 key 示例
+[aux_service_settings.aliyun] 
+# access_key_id = "" # 用户的阿里云 AccessKey ID (由客户端读取)
+# access_key_secret = "" # 用户的阿里云 AccessKey Secret (由客户端读取)
+# app_key = "" # 用户的阿里云 AppKey (例如用于TTS, 由客户端读取)
+
 # [aux_service_settings.baidu]  # Structure placeholder, keys loaded from user config
 
 # --- Timing ---

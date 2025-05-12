@@ -1,6 +1,8 @@
 //! Implementation of the AiClient trait for OpenAI-compatible APIs using the async-openai crate.
 
-use crate::{AiClient, ChatMessage, ChatParams, SttParams, TtsParams}; // Added SttParams
+use elfradio_types::{ChatMessage, ChatParams, AiError, OpenAICompatibleConfig};
+use crate::{AiClient, SttParams, TtsParams}; // SttParams and TtsParams are still local to elfradio_ai
+
 use async_openai::{
     config::OpenAIConfig, // Use the specific config type
     error::OpenAIError,
@@ -13,10 +15,8 @@ use async_openai::{
     Client as OpenAIClientSdk, // Rename SDK client for clarity
 };
 use async_trait::async_trait;
-use elfradio_types::OpenAICompatibleConfig; // Correct path assumed
 use std::sync::Arc;
 use tracing::{debug, error, info, warn}; // Add necessary tracing imports
-use elfradio_types::AiError;
 use elfradio_config::get_user_config_value;
 
 /// AI Client implementation for interacting with OpenAI-compatible APIs
@@ -32,8 +32,8 @@ pub struct OpenAICompatibleClient {
 /// Helper function to map OpenAIError to AiError
 fn map_openai_error(err: OpenAIError) -> AiError {
     tracing::warn!("Mapping OpenAI Error: {:?}", err); // Add tracing
-    match err {
-        OpenAIError::ApiError(api_err) => {
+        match err {
+            OpenAIError::ApiError(api_err) => {
             // 修复：尝试将 code 解析为 u16，如果无法解析则使用默认值 0
             let status_code: u16 = api_err.code.as_ref()
                 .and_then(|s| s.parse::<u16>().ok()) // 尝试将字符串解析为 u16

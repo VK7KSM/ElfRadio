@@ -1,8 +1,7 @@
 // Example, adjust as needed
 // use tracing::error; // Keep only error as it's used
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use elfradio_types::AiError;
+use elfradio_types::{AiError, ChatMessage, ChatParams};
 use elfradio_types::AuxServiceClient; // 添加 AuxServiceClient 导入
 
 // Declare the new submodules
@@ -18,32 +17,6 @@ pub use stepfun::StepFunTtsClient; // Optionally re-export
 /// 辅助函数：将 serde_json::Error 转换为 AiError
 pub fn json_error_to_ai_error(err: serde_json::Error) -> AiError {
         AiError::ResponseParseError(format!("JSON parsing failed: {}", err))
-}
-
-/// Represents a single message in a chat conversation history.
-/// Mirrors the structure commonly used by OpenAI, Gemini, StepFun, etc.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ChatMessage {
-    /// The role of the message author ("system", "user", or "assistant").
-    pub role: String,
-    /// The content of the message.
-    pub content: String,
-}
-
-/// Parameters for requesting a chat completion.
-#[derive(Debug, Clone, Default)]
-pub struct ChatParams {
-    /// The specific model identifier to use for the completion.
-    /// If None, will attempt to use the provider's configured preferred_model.
-    pub model: Option<String>,
-    /// Sampling temperature. Controls randomness. Lower values make output more deterministic.
-    pub temperature: Option<f32>, // Typically 0.0 to 2.0
-    /// Nucleus sampling parameter. Controls diversity.
-    pub top_p: Option<f32>, // Typically 0.0 to 1.0
-    /// The maximum number of tokens to generate in the completion.
-    pub max_tokens: Option<u32>,
-    pub timeout_seconds: Option<u64>, // 添加超时选项
-    // Add other potential parameters like stop sequences, presence_penalty etc. if needed
 }
 
 /// Parameters for requesting text-to-speech synthesis.
@@ -151,7 +124,7 @@ pub trait AiClient: Send + Sync {
 // Example of how you might use the trait object later:
 // async fn use_ai_client(client: Arc<dyn AiClient>, /* ... */) {
 //     let messages = vec![/* ... */];
-//     let params = ChatParams { /* ... */ };
+//     let params = ChatParams { /* ... */ }; // ChatParams 将来自 elfradio_types
 //     match client.chat_completion(messages, &params).await {
 //         Ok(reply) => { /* ... */ }
 //         Err(e) => { /* Handle error */ }

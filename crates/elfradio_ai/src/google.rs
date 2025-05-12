@@ -1,6 +1,7 @@
 //! Implementation of the AiClient trait for Google Gemini via its OpenAI-compatible layer.
 
-use crate::{AiClient, ChatMessage, ChatParams, SttParams, TtsParams}; // Use local AiClient trait
+use elfradio_types::{ChatMessage, ChatParams, AiError, GoogleConfig};
+use crate::{AiClient, SttParams, TtsParams}; // SttParams and TtsParams are still local to elfradio_ai
 use async_openai::{
     config::OpenAIConfig,
     error::OpenAIError,
@@ -12,7 +13,6 @@ use async_openai::{
     Client as OpenAIClientSdk, // Use the async-openai client
 };
 use async_trait::async_trait;
-use elfradio_types::{GoogleConfig, AiError}; // Use AiError from types
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 

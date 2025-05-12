@@ -61,4 +61,6 @@ pub enum CoreError {
     TaskError(String),
     #[error("AI provider is not configured. Please configure in settings.")]
     AiNotConfigured,
+    #[error("Auxiliary service not configured: {0}")]
+    AuxServiceNotConfigured(String),
 } 

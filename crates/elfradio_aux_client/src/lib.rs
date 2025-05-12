@@ -142,12 +142,12 @@ impl GoogleAuxClient {
         debug!("Attempting to create GoogleAuxClient, fetching API key from config...");
 
         // Fetch the API key using the config helper function
-        // Assuming the key structure is ai_settings.google.api_key as per standard Config
-        let key_result = get_user_config_value::<String>("ai_settings.google.api_key");
+        // CORRECTED PATH:
+        let key_result = get_user_config_value::<String>("aux_service_settings.google.api_key");
 
         match key_result {
             Ok(Some(key)) if !key.is_empty() => {
-                info!("Successfully retrieved Google auxiliary API Key (from ai_settings.google.api_key) for GoogleAuxClient.");
+                info!("Successfully retrieved Google auxiliary API Key (from aux_service_settings.google.api_key) for GoogleAuxClient.");
                 let http_client = ReqwestClient::new(); // Create HTTP client
                 Ok(Self {
                     api_key: key,
@@ -155,22 +155,21 @@ impl GoogleAuxClient {
                 })
             }
             Ok(Some(_)) => { // Key is empty
-                warn!("Found Google auxiliary API Key (ai_settings.google.api_key) in user config, but it is empty.");
+                warn!("Found Google auxiliary API Key (aux_service_settings.google.api_key) in user config, but it is empty.");
                 Err(AiError::AuthenticationError(
-                    "Google API Key (ai_settings.google.api_key) found but is empty in user configuration.".to_string(),
+                    "Google API Key (aux_service_settings.google.api_key) found but is empty in user configuration.".to_string(),
                 ))
             }
             Ok(None) => { // Key not found in user config
-                warn!("Google auxiliary API Key (ai_settings.google.api_key) not found in user configuration.");
+                warn!("Google auxiliary API Key (aux_service_settings.google.api_key) not found in user configuration.");
                  Err(AiError::AuthenticationError(
-                    "Google API Key (ai_settings.google.api_key) not found in user configuration.".to_string(),
+                    "Google API Key (aux_service_settings.google.api_key) not found in user configuration.".to_string(),
                 ))
             }
             Err(config_err) => { // Error reading/parsing config file
-                error!("Failed to read configuration for Google auxiliary API Key (ai_settings.google.api_key): {}", config_err);
-                // Map the ElfConfigError to AiError::ClientError (assuming no dedicated Config variant in elfradio_types::AiError)
-                // Or map it to a specific ConfigError variant if it exists
-                Err(AiError::ClientError(format!("Configuration error reading API key: {}", config_err)))
+                error!("Failed to read configuration for Google auxiliary API Key (aux_service_settings.google.api_key): {}", config_err);
+                // Map the ElfConfigError to AiError::Config
+                Err(AiError::Config(format!("Configuration error reading Google API key for Aux services: {}", config_err)))
             }
         }
     }
