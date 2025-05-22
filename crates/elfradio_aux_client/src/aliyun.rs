@@ -1,20 +1,19 @@
 //! Implementation of the AuxServiceClient trait for Aliyun services.
 
-use elfradio_types::{AiError, AliyunAuxCredentials, AuxServiceClient}; // Use correct type AliyunAuxCredentials
-use elfradio_config::{get_user_config_value, ConfigError}; // Import ConfigError
-use reqwest::{Client as ReqwestClient, header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_TYPE, DATE}}; // Add header imports
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use elfradio_types::{AiError, AuxServiceClient}; // Use correct type AliyunAuxCredentials
+use elfradio_config::get_user_config_value; // Import ConfigError
+use reqwest::{Client as ReqwestClient, header::{ACCEPT, CONTENT_TYPE}}; // Add header imports
+use serde::Deserialize; // Modified: Removed Serialize
 use tracing::{info, error, debug, warn, trace}; // Added debug, warn, and trace
 use async_trait::async_trait; // For trait implementation
-use chrono::{Utc, SecondsFormat}; // For timestamp in signature
+use chrono::Utc; // For timestamp in signature
 use hmac::{Hmac, Mac}; // For HMAC calculation
 use sha1::Sha1; // For SHA1 hash
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _}; // For Base64 encoding signature
 use url::form_urlencoded; // For canonical query string
 use uuid::Uuid; // For Nonce
 use std::collections::BTreeMap; // For sorting parameters
-use std::time::Duration; // Added for client timeout
+ // Added for client timeout
 use serde_json; // Added for direct JSON parsing
 use tokio::sync::Mutex; // Added for Mutex
 use chrono::DateTime; // Added for DateTime, Utc and Duration are already imported via `chrono::{Utc, SecondsFormat, Duration}` if Duration is used below. Will ensure `chrono::Duration` is explicitly available.
@@ -33,59 +32,102 @@ impl AliyunAuxClient {
     /// Creates a new Aliyun Auxiliary Client.
     /// Reads the AccessKey ID, Secret, and AppKey from the user's configuration file.
     pub async fn new() -> Result<Self, AiError> {
-        info!("Initializing AliyunAuxClient...");
+        info!("初始化 AliyunAuxClient...");
 
-        // Corrected config key path assuming it's under aux_service_settings.aliyun
+        // 定义配置路径
         let key_path_id = "aux_service_settings.aliyun.access_key_id";
         let key_path_secret = "aux_service_settings.aliyun.access_key_secret";
         let key_path_app_key = "aux_service_settings.aliyun.app_key";
 
-        // Read Access Key ID from user config
-        let access_key_id = get_user_config_value::<String>(key_path_id)
-            .map_err(|e| AiError::Config(format!("Failed to read Aliyun Access Key ID: {}", e)))?
-            .filter(|key| !key.is_empty())
-            .ok_or_else(|| {
-                error!("Aliyun Access Key ID not found or empty in user configuration at key '{}'.", key_path_id);
-                AiError::AuthenticationError(format!("Aliyun Access Key ID not found or empty (key: {}).", key_path_id))
-            })?;
-
-        // Read Access Key Secret from user config
-        let access_key_secret = get_user_config_value::<String>(key_path_secret)
-            .map_err(|e| AiError::Config(format!("Failed to read Aliyun Access Key Secret: {}", e)))?
-            .filter(|secret| !secret.is_empty())
-            .ok_or_else(|| {
-                error!("Aliyun Access Key Secret not found or empty in user configuration at key '{}'.", key_path_secret);
-                AiError::AuthenticationError(format!("Aliyun Access Key Secret not found or empty (key: {}).", key_path_secret))
-            })?;
-
-        // Read AppKey from user config
-        let app_key = match get_user_config_value::<String>(key_path_app_key) {
-            Ok(Some(key)) if !key.is_empty() => key,
-            Ok(Some(_)) | Ok(None) => {
-                let err_msg = format!("Aliyun AppKey not found or empty in user configuration at key '{}'. TTS functionality will be unavailable.", key_path_app_key);
-                error!("{}", err_msg);
-                return Err(AiError::AuthenticationError(format!("Aliyun AppKey not found or empty (key: {}). Required for TTS.", key_path_app_key)));
+        // 获取 Access Key ID，使用 match 正确处理 ConfigError
+        let access_key_id: String;
+        match get_user_config_value::<String>(key_path_id) {
+            Ok(Some(key)) if !key.is_empty() => {
+                access_key_id = key;
+                info!("AliyunAuxClient: 成功从配置路径 '{}' 获取 AccessKeyID。", key_path_id);
             }
-            Err(e) => {
-                let err_msg = format!("Failed to read Aliyun AppKey from user config (key: {}): {}", key_path_app_key, e);
+            Ok(Some(_)) => { // 键存在但为空
+                let err_msg = format!("Aliyun Access Key ID 在 '{}' 中找到但为空。阿里云辅助服务将不可用。", key_path_id);
                 error!("{}", err_msg);
-                return Err(AiError::Config(format!("Failed to read Aliyun AppKey: {}", e)));
+                return Err(AiError::AuthenticationError(err_msg));
+            }
+            Ok(None) => { // 键不存在
+                let err_msg = format!("用户配置中未找到 Aliyun Access Key ID ('{}')。阿里云辅助服务将不可用。", key_path_id);
+                error!("{}", err_msg);
+                return Err(AiError::AuthenticationError(err_msg));
+            }
+            Err(config_err) => { // 读取/解析配置文件错误
+                let err_msg = format!("从 '{}' 读取 Aliyun Access Key ID 时发生配置错误。详情: {}。阿里云辅助服务将不可用。", key_path_id, config_err);
+                error!("{}", err_msg);
+                return Err(AiError::Config(err_msg)); // 将 ConfigError 映射到 AiError::Config
+            }
+        }
+
+        // 获取 Access Key Secret，使用相同的模式
+        let access_key_secret: String;
+        match get_user_config_value::<String>(key_path_secret) {
+            Ok(Some(secret)) if !secret.is_empty() => {
+                access_key_secret = secret;
+                info!("AliyunAuxClient: 成功从配置路径 '{}' 获取 AccessKeySecret。", key_path_secret);
+            }
+            Ok(Some(_)) => {
+                let err_msg = format!("Aliyun Access Key Secret 在 '{}' 中找到但为空。阿里云辅助服务将不可用。", key_path_secret);
+                error!("{}", err_msg);
+                return Err(AiError::AuthenticationError(err_msg));
+            }
+            Ok(None) => {
+                let err_msg = format!("用户配置中未找到 Aliyun Access Key Secret ('{}')。阿里云辅助服务将不可用。", key_path_secret);
+                error!("{}", err_msg);
+                return Err(AiError::AuthenticationError(err_msg));
+            }
+            Err(config_err) => {
+                let err_msg = format!("从 '{}' 读取 Aliyun Access Key Secret 时发生配置错误。详情: {}。阿里云辅助服务将不可用。", key_path_secret, config_err);
+                error!("{}", err_msg);
+                return Err(AiError::Config(err_msg));
+            }
+        }
+
+        // 获取 AppKey，使用相同的模式
+        let app_key: String;
+        match get_user_config_value::<String>(key_path_app_key) {
+            Ok(Some(key)) if !key.is_empty() => {
+                app_key = key;
+                info!("AliyunAuxClient: 成功从配置路径 '{}' 获取 AppKey。", key_path_app_key);
+            }
+            Ok(Some(_)) | Ok(None) => {
+                let err_msg = format!("Aliyun AppKey 在 '{}' 中不存在或为空。文本转语音功能将不可用。", key_path_app_key);
+                error!("{}", err_msg);
+                return Err(AiError::AuthenticationError(format!("Aliyun AppKey 不存在或为空 (路径: {})。文本转语音功能所必需的。", key_path_app_key)));
+            }
+            Err(config_err) => {
+                let err_msg = format!("从 '{}' 读取 Aliyun AppKey 时发生配置错误。详情: {}。阿里云辅助服务将不可用。", key_path_app_key, config_err);
+                error!("{}", err_msg);
+                return Err(AiError::Config(format!("读取 Aliyun AppKey 失败: {}", config_err)));
+            }
+        }
+
+        info!("成功从用户配置中获取阿里云凭证（包括 AppKey）。");
+
+        // 创建 HTTP 客户端
+        let http_client = match ReqwestClient::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build() {
+                Ok(client) => client,
+            Err(e) => {
+                    let err_msg = format!("创建 Reqwest 客户端失败: {}", e);
+                error!("{}", err_msg);
+                    return Err(AiError::ClientError(err_msg));
             }
         };
 
-        info!("Successfully retrieved Aliyun credentials (including AppKey) from user config.");
-
-        let http_client = ReqwestClient::builder()
-            .timeout(std::time::Duration::from_secs(30)) // Using std::time::Duration fully qualified
-            .build()
-            .map_err(|e| AiError::ClientError(format!("Failed to build Reqwest client: {}", e)))?;
+        info!("AliyunAuxClient: 已成功初始化，包含所有必需的凭证和 HTTP 客户端。");
 
         Ok(Self {
             access_key_id,
             access_key_secret,
             app_key,
             http_client,
-            cached_token: Mutex::new(None), // Initialize cached_token
+            cached_token: Mutex::new(None),
         })
     }
 
@@ -96,7 +138,7 @@ impl AliyunAuxClient {
     fn calculate_aliyun_signature(
         &self,
         method: &str, // "GET" or "POST"
-        api_path: &str, // 应始终为 "/"，用于签名计算
+        _api_path: &str, // 应始终为 "/"，用于签名计算
         parameters: &BTreeMap<String, String> 
     ) -> Result<String, AiError> {
         // 1. Percent-encode keys and values according to RFC3986
@@ -364,6 +406,7 @@ pub struct AliyunTokenData {
     pub user_id: String,
 }
 
+#[allow(dead_code)] // Add this line
 #[derive(Deserialize, Debug, Clone)]
 pub struct AliyunCreateTokenResponse {
     #[serde(rename = "RequestId")]
@@ -418,18 +461,6 @@ pub struct AliyunAsrResponse {
 // --- End Aliyun ASR API Response Structures ---
 
 // --- Aliyun Translate API 请求/响应结构体 ---
-
-/// Represents the JSON body for the Aliyun TranslateGeneral API request.
-#[derive(Serialize, Debug)]
-#[serde(rename_all = "PascalCase")] // Aliyun API uses PascalCase
-struct AliyunTranslateRequest<'a> {
-    format_type: &'static str, // Typically "text"
-    source_language: &'a str,
-    target_language: &'a str,
-    source_text: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    scene: Option<&'a str>, // e.g., "general"
-}
 
 /// Represents the nested 'Data' part of a successful Aliyun Translate response.
 #[derive(Deserialize, Debug)]

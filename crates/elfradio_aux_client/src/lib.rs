@@ -1,11 +1,10 @@
 use elfradio_config::get_user_config_value;
-use elfradio_config::ConfigError as ElfConfigError; // Import config error type
+ // Import config error type
 use reqwest::Client as ReqwestClient; // Assuming reqwest is used
-use thiserror::Error;
 use async_trait::async_trait; // For async trait methods
 use tracing::{debug, error, info, warn, trace};
 use serde::{Deserialize, Serialize}; // Added for request/response structs
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+use reqwest::header::CONTENT_TYPE;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use std::sync::Arc; // 添加 Arc 导入
 
@@ -141,35 +140,50 @@ impl GoogleAuxClient {
     pub fn new() -> Result<Self, AiError> {
         debug!("Attempting to create GoogleAuxClient, fetching API key from config...");
 
-        // Fetch the API key using the config helper function
-        // CORRECTED PATH:
-        let key_result = get_user_config_value::<String>("aux_service_settings.google.api_key");
+        let api_key_from_config = get_user_config_value::<String>("aux_service_settings.google.api_key")
+            .map_err(|config_err| {
+                // 增强日志
+                error!("GoogleAuxClient: Failed to read configuration for API Key at 'aux_service_settings.google.api_key'. Details: {}. Google auxiliary services will be unavailable.", config_err);
+                AiError::Config(format!(
+                    "Failed to read Google auxiliary API key from user config: {}",
+                    config_err
+                ))
+            })?;
 
-        match key_result {
-            Ok(Some(key)) if !key.is_empty() => {
-                info!("Successfully retrieved Google auxiliary API Key (from aux_service_settings.google.api_key) for GoogleAuxClient.");
-                let http_client = ReqwestClient::new(); // Create HTTP client
-                Ok(Self {
-                    api_key: key,
-                    http_client,
-                })
+        match api_key_from_config {
+            Some(key) if !key.is_empty() => {
+                // 增强日志
+                info!("GoogleAuxClient: Successfully retrieved API Key from 'aux_service_settings.google.api_key'. Client will be initialized.");
+                
+                // 在这里创建 ReqwestClient
+                match ReqwestClient::builder()
+                    // .timeout(std::time::Duration::from_secs(10)) // Example timeout
+                    .build() {
+                    Ok(http_client) => {
+                        // 新增日志
+                        info!("GoogleAuxClient: Reqwest HTTP client created successfully.");
+                        Ok(Self { http_client, api_key: key })
+                    }
+                    Err(e) => {
+                        // 增强日志 (如果未来添加了错误处理)
+                        error!("GoogleAuxClient: Failed to build Reqwest HTTP client. Details: {}", e);
+                        Err(AiError::ClientError(format!("Failed to build Reqwest HTTP client: {}", e)))
             }
-            Ok(Some(_)) => { // Key is empty
-                warn!("Found Google auxiliary API Key (aux_service_settings.google.api_key) in user config, but it is empty.");
+                }
+            }
+            Some(_) => { // Key is empty
+                // 增强日志
+                warn!("GoogleAuxClient: API Key found in 'aux_service_settings.google.api_key' but is empty. Google auxiliary services (TTS, STT, Translate) will be unavailable.");
                 Err(AiError::AuthenticationError(
-                    "Google API Key (aux_service_settings.google.api_key) found but is empty in user configuration.".to_string(),
+                    "Google auxiliary API Key is configured but empty.".to_string(),
                 ))
             }
-            Ok(None) => { // Key not found in user config
-                warn!("Google auxiliary API Key (aux_service_settings.google.api_key) not found in user configuration.");
+            None => { // Key not found
+                // 增强日志
+                warn!("GoogleAuxClient: API Key not found at 'aux_service_settings.google.api_key' in user configuration. Google auxiliary services (TTS, STT, Translate) will be unavailable.");
                  Err(AiError::AuthenticationError(
-                    "Google API Key (aux_service_settings.google.api_key) not found in user configuration.".to_string(),
+                    "Google auxiliary API Key not found in user config at aux_service_settings.google.api_key.".to_string(),
                 ))
-            }
-            Err(config_err) => { // Error reading/parsing config file
-                error!("Failed to read configuration for Google auxiliary API Key (aux_service_settings.google.api_key): {}", config_err);
-                // Map the ElfConfigError to AiError::Config
-                Err(AiError::Config(format!("Configuration error reading Google API key for Aux services: {}", config_err)))
             }
         }
     }
@@ -253,8 +267,6 @@ impl AuxServiceClient for GoogleAuxClient {
 
     // Implemented text_to_speech method
     async fn text_to_speech(&self, text: &str, language_code: &str, voice_name: Option<&str>) -> Result<Vec<u8>, AiError> {
-        let api_key = &self.api_key;
-
         let input = TtsSynthesisInput { text };
         let voice = TtsVoiceSelectionParams { language_code, name: voice_name };
         // Request LINEAR16 for easier processing later
@@ -331,8 +343,6 @@ impl AuxServiceClient for GoogleAuxClient {
 
     // Implemented speech_to_text method
     async fn speech_to_text(&self, audio_data: &[u8], sample_rate_hertz: u32, language_code: &str) -> Result<String, AiError> {
-        let api_key = &self.api_key;
-
         // 1. Base64 encode the audio data
         let audio_base64 = BASE64_STANDARD.encode(audio_data);
 

@@ -2,7 +2,7 @@
 // use tracing::error; // Keep only error as it's used
 use async_trait::async_trait;
 use elfradio_types::{AiError, ChatMessage, ChatParams};
-use elfradio_types::AuxServiceClient; // 添加 AuxServiceClient 导入
+ // 添加 AuxServiceClient 导入
 
 // Declare the new submodules
 mod openai_compatible;

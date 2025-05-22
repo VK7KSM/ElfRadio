@@ -17,7 +17,6 @@ use async_openai::{
 use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn}; // Add necessary tracing imports
-use elfradio_config::get_user_config_value;
 
 /// AI Client implementation for interacting with OpenAI-compatible APIs
 /// (e.g., OpenAI itself, StepFun Chat, DeepSeek API).

@@ -1,7 +1,7 @@
 # Default configuration values for ElfRadio
 
 app_name = "ElfRadio"
-log_level = "info"
+log_level = "debug"
 tasks_base_directory = "./elfradio_tasks" # Or adjust the default path as needed
 ui_language = "en"
 

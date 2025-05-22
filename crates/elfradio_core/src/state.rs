@@ -6,6 +6,7 @@ use elfradio_types::{
     Config,
     ClientMap, AudioOutputSender, TxItem, TaskInfo, TaskStatus,
     AuxServiceClient,
+    LogEntry, WebSocketMessage,
 };
 use elfradio_ai::AiClient;
 use sqlx::SqlitePool;
@@ -25,9 +26,12 @@ pub struct AppState {
     pub task_status: Mutex<TaskStatus>,
     pub shutdown_tx: watch::Sender<bool>,
     pub db_pool: SqlitePool,
+    pub log_entry_tx_for_handlers: mpsc::UnboundedSender<LogEntry>,
+    pub status_update_tx_for_handlers: mpsc::UnboundedSender<WebSocketMessage>,
 }
 
 impl AppState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
         tx_queue_sender: mpsc::UnboundedSender<TxItem>,
@@ -37,6 +41,8 @@ impl AppState {
         is_transmitting: Arc<Mutex<bool>>,
         shutdown_tx: watch::Sender<bool>,
         db_pool: SqlitePool,
+        log_entry_tx_clone_for_handlers: mpsc::UnboundedSender<LogEntry>,
+        status_update_tx_clone_for_handlers: mpsc::UnboundedSender<WebSocketMessage>
     ) -> Self {
         Self {
             config,
@@ -52,6 +58,8 @@ impl AppState {
             task_status: Mutex::new(TaskStatus::Idle),
             shutdown_tx,
             db_pool,
+            log_entry_tx_for_handlers: log_entry_tx_clone_for_handlers,
+            status_update_tx_for_handlers: status_update_tx_clone_for_handlers,
         }
     }
 

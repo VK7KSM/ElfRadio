@@ -5,8 +5,8 @@ use super::state::AppState; // Use the parent\'s state module
 use elfradio_types::{
     TxItem, PttSignal, AiConfig, AiProvider,
     LogEntry, LogDirection, LogContentType,
-    TaskInfo, // 新增导入 TaskInfo
-    AuxServiceProvider, AiError, // ADDED AiError for mapping
+    TaskInfo, // ADDED AiError for mapping
+    WebSocketMessage, SystemServiceStatus, AiError, // Added for 5.7.6.1
 };
 use elfradio_ai::TtsParams; // Removed AiError
 use elfradio_hardware;
@@ -24,8 +24,7 @@ use chrono::Utc;
 use crate::logging;
 use std::path::{Path, PathBuf};
 use elfradio_db::insert_log_entry;
-use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction, ResampleError};
-
+use rubato::Resampler;
 // Define a specific Result type alias for this module
 type TxProcessingOutcome<T> = std::result::Result<T, CoreError>;
 
@@ -440,10 +439,12 @@ pub async fn tx_queue_processor(
 /// Generates speech audio from text using TTS and queues it for transmission.
 /// This is intended for use cases where TTS is triggered directly, bypassing
 /// the standard AI reply flow (e.g., manual text input).
-#[instrument(skip(app_state, text_to_speak), fields(text_len = text_to_speak.len()))]
+#[instrument(skip(app_state, text_to_speak, log_entry_tx, status_update_tx), fields(text_len = text_to_speak.len()))]
 pub async fn queue_text_for_transmission(
     app_state: Arc<AppState>,
     text_to_speak: String,
+    log_entry_tx: &tokio::sync::mpsc::UnboundedSender<LogEntry>,      // New parameter
+    status_update_tx: &tokio::sync::mpsc::UnboundedSender<WebSocketMessage> // New parameter
 ) -> Result<(), CoreError> {
     info!("Queuing text for transmission: {}", text_to_speak);
     
@@ -505,18 +506,13 @@ pub async fn queue_text_for_transmission(
                 info!(task_id = %task_id, "Using Google Aux TTS: lang_code='{}', voice_name='{:?}'", lang_code_str, voice_name_opt);
             }
             Some(elfradio_types::AuxServiceProvider::Aliyun) => {
-                // For Aliyun, 'Aiyue' is the default voice.
-                // The language_code for Aliyun text_to_speech is passed to the client method.
-                voice_name_opt = Some("Aiyue".to_string()); // Assuming this is the desired default for Aliyun
-                lang_code_str = "zh-CN".to_string(); // Default language for "Aiyue" or as per Aliyun's expectation for this voice.
-                                                     // You might want to get this from aliyun_config if it's configurable:
-                                                     // lang_code_str = aux_provider_cfg.aliyun.language_code.clone().unwrap_or_else(|| "zh-CN".to_string());
+                voice_name_opt = Some("Aiyue".to_string()); 
+                lang_code_str = "zh-CN".to_string(); 
                 info!(task_id = %task_id, "Using Aliyun Aux TTS: lang_code='{}', voice_name='{:?}'", lang_code_str, voice_name_opt);
             }
-            // TODO: Add cases for AuxServiceProvider::Baidu when implemented
-            None | Some(_) => { // Handles Baidu (unimplemented) and None provider cases
+            None | Some(_) => { 
                 let provider_display_name = match aux_provider_cfg.provider.as_ref() {
-                    Some(p_val) => format!("{:?}", p_val), // Use format! to get String
+                    Some(p_val) => format!("{:?}", p_val), 
                     None => "None".to_string(),
                 };
                 warn!(task_id = %task_id, "Auxiliary TTS provider is {} or not fully supported for parameter extraction. Defaulting TTS params to en-US, no specific voice.", provider_display_name);
@@ -525,42 +521,69 @@ pub async fn queue_text_for_transmission(
             }
         }
         debug!(task_id = %task_id, "Determined TTS params: lang_code_str='{}', voice_name_opt='{:?}'", lang_code_str, voice_name_opt);
-        // --- End: New TTS Parameter Determination Logic ---
         
-        // --- Call AuxServiceClient for TTS ---
-        // Create &str references from the determined String/Option<String> parameters
         let lang_code_ref: &str = &lang_code_str;
         let voice_name_ref: Option<&str> = voice_name_opt.as_deref();
 
         debug!(task_id = %task_id, "Attempting TTS via aux_client with lang_code: '{}', voice_name: {:?}", lang_code_ref, voice_name_ref);
 
-        let audio_bytes: Vec<u8>; // Declare audio_bytes to store the result
+        let audio_bytes: Vec<u8>; 
 
-        // Acquire a read lock on app_state.aux_client
         let aux_client_guard = app_state.aux_client.read().await;
 
         if let Some(client) = aux_client_guard.as_ref() {
-            // Call text_to_speech on the AuxServiceClient instance
             match client.text_to_speech(&text_to_speak, lang_code_ref, voice_name_ref).await {
                 Ok(bytes) => {
                     audio_bytes = bytes;
                     info!(task_id = %task_id, "TTS call successful via aux_client, received {} audio bytes.", audio_bytes.len());
                 }
                 Err(ai_error) => {
-                    error!(task_id = %task_id, "TTS conversion failed via aux_client: {:?}", ai_error);
-                    // Propagate AiError, which will be converted to CoreError::AiError by `?` or explicit `From`
+                    // --- Enhanced Error Handling for TTS Failure (Step 5.7.6.1) ---
+                    let determined_tts_status = match &ai_error {
+                        AiError::AuthenticationError(_) | AiError::ApiError { status: 401, .. } | AiError::ApiError { status: 403, .. } => {
+                            SystemServiceStatus::Warning
+                        }
+                        AiError::ApiError { status: 429, .. } => {
+                            SystemServiceStatus::Warning
+                        }
+                        AiError::RequestError(_) | AiError::ApiError { status: 500..=599, .. } | AiError::ClientError(_) => {
+                            SystemServiceStatus::Error
+                        }
+                        _ => SystemServiceStatus::Error,
+                    };
+
+                    let log_message = format!(
+                        "TTS Service Runtime Error (Provider: {:?}): Failed to convert text to speech. Status determined: {:?}. Details: {:?}",
+                        app_state.config.aux_service_settings.provider,
+                        determined_tts_status,
+                        ai_error
+                    );
+                    error!(task_id = %task_id, "{}", log_message); 
+
+                    let tts_error_log_entry = LogEntry {
+                        timestamp: Utc::now(),
+                        direction: LogDirection::Internal,
+                        content_type: LogContentType::Status,
+                        content: log_message,
+                    };
+                    if log_entry_tx.send(tts_error_log_entry).is_err() {
+                        error!(task_id = %task_id, "Failed to send TTS runtime error log entry via MPSC channel.");
+                    }
+
+                    let tts_status_update_msg = WebSocketMessage::TtsStatusUpdate(determined_tts_status);
+                    if status_update_tx.send(tts_status_update_msg).is_err() {
+                        error!(task_id = %task_id, "Failed to send TtsStatusUpdate via MPSC channel for runtime error.");
+                    }
+                    // --- End Enhanced Error Handling ---
                     return Err(CoreError::from(ai_error)); 
                 }
             }
         } else {
             error!(task_id = %task_id, "TTS failed: Auxiliary service (aux_client) is not configured.");
-            // Use the CoreError::AuxServiceNotConfigured variant added in Step 1
             return Err(CoreError::AuxServiceNotConfigured(
                 "TTS service is not available because no auxiliary service provider is configured in aux_service_settings.".to_string()
             ));
         }
-        // `aux_client_guard` is dropped here, releasing the read lock.
-        // --- End: TTS Call Logic ---
 
         // 声明处理后的音频数据和WAV规格
         let audio_f32: Vec<f32>;
@@ -937,6 +960,9 @@ pub async fn queue_text_for_transmission(
         Ok(())
     } else {
         warn!("No active task found when trying to queue text for transmission.");
+        // Also send log and status update if desired when no task is active,
+        // but for now, this error is handled by the caller.
+        // Consider if a global TtsStatusUpdate(Error) should be sent here.
         Err(CoreError::NoTaskRunning)
     }
 }

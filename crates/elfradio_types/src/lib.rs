@@ -352,6 +352,8 @@ pub struct Config {
     pub sstv_settings: SstvConfig,
     /// Network configuration
     pub network: Option<NetworkConfig>,
+    /// User UUID for this ElfRadio installation
+    pub user_uuid: Option<String>,
 }
 
 impl Default for Config {
@@ -413,6 +415,7 @@ impl Default for Config {
                 listen_address: Some("0.0.0.0".to_string()),
                 listen_port: Some(5900),
             }),
+            user_uuid: None, // 新增字段，默认为 None
         }
     }
 }
@@ -477,6 +480,23 @@ pub enum LogContentType {
     // Add other types later like Image(SSTV), Error etc.
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionStatus {
+    Connected,
+    Disconnected,
+    Checking,
+    Error,
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum SystemServiceStatus {
+    Ok,
+    Warning,
+    Error,
+    Unknown,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct LogEntry {
     pub timestamp: DateTime<Utc>, // Precise timestamp
@@ -492,6 +512,17 @@ pub struct LogEntry {
 #[serde(tag = "type", content = "payload")] // Use tag/content for easy frontend parsing
 pub enum WebSocketMessage {
     Log(LogEntry), // 包装日志条目
+
+    // New System Status Update Variants to be added:
+    RadioStatusUpdate(ConnectionStatus),
+    SdrStatusUpdate(ConnectionStatus),
+    LlmStatusUpdate(SystemServiceStatus),
+    SttStatusUpdate(SystemServiceStatus),
+    TtsStatusUpdate(SystemServiceStatus),
+    TranslateStatusUpdate(SystemServiceStatus),
+    NetworkConnectivityUpdate(ConnectionStatus),
+    UserUuidUpdate(Option<String>),
+
     // 之后可以添加其他消息类型，例如:
     // TaskStatusUpdate { status: TaskStatus, task_id: Option<Uuid>, task_mode: Option<TaskMode> },
     // BackendStatus { status: String }, // 例如 "OK", "Error", "Starting"
@@ -673,6 +704,9 @@ pub struct FrontendConfig {
 
     // Example: Network settings (Port/Address) might be useful for frontend
     pub network: Option<NetworkConfig>,
+    
+    // 用户UUID，安全地传递给前端
+    pub user_uuid: Option<String>,
 }
 
 impl From<&Config> for FrontendConfig {
@@ -728,6 +762,7 @@ impl From<&Config> for FrontendConfig {
             signal_tone: config.signal_tone.clone(),
             sstv_settings: config.sstv_settings.clone(),
             network: config.network.clone(),
+            user_uuid: config.user_uuid.clone(), // 添加 user_uuid 映射
             // Omit sensitive structs like `security` unless specific fields are mapped
         }
     }

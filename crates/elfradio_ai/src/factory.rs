@@ -8,12 +8,12 @@ use tracing::{info, error};
 // but other types like AiProvider, Config, specific configs (OpenAICompatibleConfig, GoogleConfig, StepFunTtsConfig),
 // and AiError are crucial.
 use elfradio_types::{
-    AiProvider, Config, OpenAICompatibleConfig, GoogleConfig, StepFunTtsConfig, AiError,
+    AiProvider, Config, OpenAICompatibleConfig, AiError,
     // AuxServiceClient and AuxServiceProvider might be needed if creating aux clients here too
 };
 
 // Import client implementations and the core AiClient trait from this crate (super)
-use super::{AiClient, GoogleAiClient, StepFunTtsClient, OpenAICompatibleClient};
+use super::{AiClient, StepFunTtsClient, OpenAICompatibleClient};
 // If Aux clients were created here, you might have:
 // use elfradio_aux_client::GoogleAuxClient;
 
@@ -28,7 +28,7 @@ pub async fn create_ai_client(config: &Config) -> Result<Arc<dyn AiClient + Send
     let provider = match ai_config.provider.as_ref() { // ai_config.provider is Option<AiProvider> from elfradio_types
         Some(p) => p, // Provider is specified, proceed.
         None => {
-            info!("AI provider is not specified in configuration. Cannot create AI client.");
+            info!("Primary AI (LLM) provider is not specified in `ai_settings.provider`. ElfRadio AI client cannot be created. LLM features will be unavailable until configured.");
             // Return the specific error if no provider is configured.
             return Err(AiError::ProviderNotSpecified); // AiError from elfradio_types
         }
@@ -39,16 +39,16 @@ pub async fn create_ai_client(config: &Config) -> Result<Arc<dyn AiClient + Send
     // Proceed with creating the client based on the specified provider.
     match provider {
         AiProvider::GoogleGemini => {
-            info!("Configuring OpenAICompatibleClient for Google Gemini provider...");
+            info!("Attempting to initialize AiClient for GoogleGemini provider...");
             // 1. Get Google specific config
-            let google_config = config.ai_settings.google.as_ref().ok_or_else(|| { // google_config is Option<GoogleConfig> from elfradio_types
-                error!("GoogleGemini provider selected but [ai_settings.google] configuration is missing.");
+            let google_config = config.ai_settings.google.as_ref().ok_or_else(|| {
+                error!("AiClient (GoogleGemini): Initialization failed. The '[ai_settings.google]' configuration block is missing in elfradio_config.toml or default config.");
                     AiError::ClientError("Google API Key configuration is missing for GoogleGemini provider.".to_string())
                 })?;
 
             // 2. Extract the Google API Key
             let google_api_key = google_config.api_key.as_ref().ok_or_else(|| {
-                error!("Google API Key is missing in [ai_settings.google].");
+                error!("AiClient (GoogleGemini): Initialization failed. The 'api_key' is missing or empty within the '[ai_settings.google]' configuration block.");
                 AiError::AuthenticationError("Google API Key not found or empty in user config.".to_string())
             })?;
 
@@ -57,7 +57,7 @@ pub async fn create_ai_client(config: &Config) -> Result<Arc<dyn AiClient + Send
 
 
             // 4. Manually create an OpenAICompatibleConfig for this specific case
-            let compat_config_for_google = OpenAICompatibleConfig { // OpenAICompatibleConfig from elfradio_types
+            let compat_config_for_google = OpenAICompatibleConfig {
                 name: Some("Google Gemini (via OpenAI Compat)".to_string()),
                 base_url: Some(google_compat_endpoint.to_string()),
                 api_key: Some(google_api_key.clone()),
@@ -65,30 +65,49 @@ pub async fn create_ai_client(config: &Config) -> Result<Arc<dyn AiClient + Send
             };
 
             // 5. Create the OpenAICompatibleClient using the constructed config
-            match OpenAICompatibleClient::new(compat_config_for_google) { // OpenAICompatibleClient is from super (local to this crate)
-                Ok(client) => Ok(Arc::new(client)),
+            match OpenAICompatibleClient::new(compat_config_for_google) {
+                Ok(client) => {
+                    info!("AiClient (GoogleGemini): Successfully initialized using OpenAICompatibleClient via Google's compatible endpoint.");
+                    Ok(Arc::new(client))
+                }
                 Err(e) => {
-                    error!("Failed to create OpenAICompatibleClient for Google Gemini: {}", e);
-                    Err(e) // e is AiError from elfradio_types
+                    error!("AiClient (GoogleGemini): Failed to create OpenAICompatibleClient instance. Details: {}", e);
+                    Err(e)
                 }
             }
         }
         AiProvider::StepFunTTS => {
-            let stepfun_config = ai_config.stepfun_tts.as_ref().ok_or_else(|| { // stepfun_tts is Option<StepFunTtsConfig> from elfradio_types
-                error!("StepFunTTS provider selected but configuration is missing.");
+            info!("Attempting to initialize AiClient for StepFunTTS provider...");
+            let stepfun_config = ai_config.stepfun_tts.as_ref().ok_or_else(|| {
+                error!("AiClient (StepFunTTS): Initialization failed. The '[ai_settings.stepfun_tts]' configuration block is missing.");
                 AiError::ClientError("StepFunTTS configuration is missing.".to_string())
             })?;
-            let client = StepFunTtsClient::new(stepfun_config.clone())?; // StepFunTtsClient is from super
-            Ok(Arc::new(client) as Arc<dyn AiClient + Send + Sync>) // AiClient is from super
+            match StepFunTtsClient::new(stepfun_config.clone()) {
+                Ok(client) => {
+                    info!("AiClient (StepFunTTS): Successfully initialized StepFunTtsClient. Note: This client is primarily for TTS and may have limited LLM capabilities via AiClient trait.");
+                    Ok(Arc::new(client) as Arc<dyn AiClient + Send + Sync>)
+                }
+                Err(e) => {
+                    error!("AiClient (StepFunTTS): Failed to create StepFunTtsClient instance. Details: {}", e);
+                    Err(e)
+                }
+            }
         }
         AiProvider::OpenAICompatible => {
-            let openai_config = config.ai_settings.openai_compatible.as_ref().ok_or_else(|| { // openai_compatible is Option<OpenAICompatibleConfig>
-                 error!("OpenAICompatible provider selected but [ai_settings.openai_compatible] configuration is missing.");
+            info!("Attempting to initialize AiClient for OpenAICompatible provider...");
+            let openai_config = config.ai_settings.openai_compatible.as_ref().ok_or_else(|| {
+                 error!("AiClient (OpenAICompatible): Initialization failed. The '[ai_settings.openai_compatible]' configuration block is missing.");
                 AiError::ClientError("OpenAICompatible configuration is missing.".to_string())
              })?;
-             match OpenAICompatibleClient::new(openai_config.clone()) { // OpenAICompatibleClient is from super
-                 Ok(client) => Ok(Arc::new(client)),
-                 Err(e) => Err(e),
+             match OpenAICompatibleClient::new(openai_config.clone()) {
+                 Ok(client) => {
+                    info!("AiClient (OpenAICompatible): Successfully initialized OpenAICompatibleClient for provider: '{:?}'.", openai_config.name);
+                    Ok(Arc::new(client))
+                 }
+                 Err(e) => {
+                    error!("AiClient (OpenAICompatible): Failed to create OpenAICompatibleClient instance for provider '{:?}'. Details: {}", openai_config.name, e);
+                    Err(e)
+                 }
              }
         }
     }

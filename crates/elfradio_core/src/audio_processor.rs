@@ -4,6 +4,7 @@ use super::error::CoreError; // Use the new error module from the parent
 use super::state::AppState; // Use the state module from the parent
 use elfradio_types::{
     AudioMessage, LogContentType, LogDirection, LogEntry, AiConfig, // Added AiConfig
+    WebSocketMessage, SystemServiceStatus, AiError, // Added for 5.7.6.2
 };
 // use elfradio_ai::{AiClient, SttParams}; // Add if STT logic is included later
 use elfradio_dsp::vad::VadProcessor;
@@ -173,35 +174,30 @@ fn construct_stt_params(ai_config: &AiConfig) -> Result<SttParams, CoreError> {
 ///
 /// Expects `audio_bytes` to contain raw audio data in a format compatible
 /// with the STT service (typically WAV or raw PCM, check AiClient implementation).
-#[instrument(skip(app_state, audio_data), fields(audio_len = audio_data.len()))]
+#[instrument(skip(app_state, audio_data, log_entry_tx, status_update_tx), fields(audio_len = audio_data.len()))]
 pub async fn process_stt_request(
     app_state: Arc<AppState>,
     audio_data: Vec<u8>,
+    log_entry_tx: &tokio::sync::mpsc::UnboundedSender<LogEntry>,      // New parameter
+    status_update_tx: &tokio::sync::mpsc::UnboundedSender<WebSocketMessage> // New parameter
 ) -> Result<String, CoreError> {
     info!("Processing STT request for audio chunk of size: {}", audio_data.len());
 
     if audio_data.is_empty() {
         warn!("Received empty audio data for STT request, skipping.");
-        // 返回空字符串表示没有识别结果
         return Ok("".to_string());
     }
 
-    // 1. 从配置构造 STT 参数
     let stt_params = construct_stt_params(&app_state.config.ai_settings)?;
     debug!("Constructed STT Params: {:?}", stt_params);
 
-    // 2. 获取 AI 客户端的读锁
     let ai_client_guard = app_state.ai_client.read().await;
 
-    // 3. 检查 AI 客户端是否存在
     if let Some(client) = ai_client_guard.as_ref() {
-        // 如果客户端存在，调用 STT
         match client.speech_to_text(&audio_data, &stt_params).await {
             Ok(text) => {
                 info!("Successfully transcribed audio: {}", text);
                 
-                // 4. 添加数据库记录代码
-                // 获取 task_id 和 db_pool
                 let task_id_opt: Option<Uuid> = {
                     let task_guard = app_state.active_task.lock().await;
                     task_guard.as_ref().map(|info| info.id)
@@ -213,13 +209,11 @@ pub async fn process_stt_request(
                         timestamp: Utc::now(),
                         direction: LogDirection::Incoming,
                         content_type: LogContentType::Text,
-                        content: text.clone(), // 使用转录的文本
+                        content: text.clone(), 
                     };
 
-                    // 调用数据库插入函数
                     if let Err(e) = insert_log_entry(db_pool, task_id, &entry).await {
                         error!(task_id = %task_id, "Failed to insert STT log entry into database: {:?}", e);
-                        // 决定是否需要向上传播错误
                     } else {
                         debug!(task_id = %task_id, "STT log entry inserted into database.");
                     }
@@ -229,15 +223,59 @@ pub async fn process_stt_request(
                 
                 Ok(text)
             },
-            Err(e) => {
-                error!("STT Error: {:?}. Transcription not logged.", e);
-                Err(CoreError::AiRequestFailed(format!("STT failed: {}", e)))
+            Err(ai_error) => { // ai_error is the AiError from speech_to_text
+                // --- Enhanced Error Handling for STT Failure (Step 5.7.6.2) ---
+                let determined_stt_status = match &ai_error {
+                    AiError::AuthenticationError(_) | AiError::ApiError { status: 401, .. } | AiError::ApiError { status: 403, .. } => {
+                        SystemServiceStatus::Warning
+                    }
+                    AiError::ApiError { status: 429, .. } => {
+                        SystemServiceStatus::Warning
+                    }
+                    AiError::RequestError(_) | AiError::ApiError { status: 500..=599, .. } | AiError::ClientError(_) => {
+                        SystemServiceStatus::Error
+                    }
+                    _ => SystemServiceStatus::Error,
+                };
+
+                let task_id_for_log: String = app_state.active_task.lock().await.as_ref().map_or("N/A".to_string(), |info| info.id.to_string());
+
+                let log_message = format!(
+                    "STT Service Runtime Error (Provider: {:?}): Failed to transcribe audio. Status determined: {:?}. TaskID: {}. Details: {:?}",
+                    app_state.config.aux_service_settings.provider, // Note: This assumes STT uses aux_client. If STT is from ai_client, config path might be different.
+                                                                    // For now, using aux_service_settings.provider as per example. Adjust if STT uses a different config section.
+                    determined_stt_status,
+                    task_id_for_log,
+                    ai_error
+                );
+                error!("{}", log_message);
+
+                let stt_error_log_entry = LogEntry {
+                    timestamp: Utc::now(),
+                    direction: LogDirection::Internal,
+                    content_type: LogContentType::Status,
+                    content: log_message,
+                };
+                if log_entry_tx.send(stt_error_log_entry).is_err() {
+                    error!(task_id = %task_id_for_log, "Failed to send STT runtime error log entry via MPSC channel.");
+                }
+
+                let stt_status_update_msg = WebSocketMessage::SttStatusUpdate(determined_stt_status);
+                if status_update_tx.send(stt_status_update_msg).is_err() {
+                    error!(task_id = %task_id_for_log, "Failed to send SttStatusUpdate via MPSC channel for runtime error.");
+                }
+                // --- End Enhanced Error Handling ---
+                
+                // Propagate the original error, mapped to CoreError
+                Err(CoreError::AiRequestFailed(format!("STT failed: {}", ai_error)))
             }
         }
     } else {
-        // 如果客户端为 None，使用新定义的 AiNotConfigured 错误
         warn!("Attempted to call STT, but AI provider is not configured.");
-        Err(CoreError::AiNotConfigured) // 使用新定义的错误
+        // It might be useful to also send a status update and log entry here.
+        // For now, following the pattern of returning an error directly.
+        // Consider adding log_entry_tx.send and status_update_tx.send for AiNotConfigured if consistent behavior is desired.
+        Err(CoreError::AiNotConfigured)
     }
 }
 
@@ -245,11 +283,13 @@ pub async fn process_stt_request(
 // pub async fn process_stt_request(...) -> Result<String, CoreError> { ... } 
 
 /// 处理音频输入并支持优雅关闭
-#[instrument(skip(audio_rx, app_state, shutdown_rx))]
+#[instrument(skip(audio_rx, app_state, shutdown_rx, log_entry_tx, status_update_tx))]
 pub async fn audio_input_processor(
     mut audio_rx: mpsc::UnboundedReceiver<AudioMessage>,
     app_state: Arc<AppState>,
     mut shutdown_rx: watch::Receiver<bool>,
+    log_entry_tx: mpsc::UnboundedSender<LogEntry>,      // New parameter
+    status_update_tx: mpsc::UnboundedSender<WebSocketMessage> // New parameter
 ) {
     info!("Starting audio input processor task.");
 
@@ -265,22 +305,59 @@ pub async fn audio_input_processor(
             maybe_message = audio_rx.recv() => {
                 if let Some(message) = maybe_message {
                     // --- Check for active task BEFORE processing task-specific data ---
-                    let active_task_info = app_state.get_active_task_info().await; // Use helper method
+                    let active_task_info_option = app_state.get_active_task_info().await; // Use helper method
 
                     match message {
                         AudioMessage::Data(f32_data) => {
-                            if let Some(task_info) = active_task_info {
-                                // --- Task is active: Process audio data ---
+                            if let Some(task_info) = active_task_info_option { // 从 Option 获取 task_info
+                                // --- Task is active: Process audio data ---\
                                 trace!(task_id=%task_info.id, "Processing audio data chunk (size: {}) for active task.", f32_data.len());
                                 // TODO: Implement VAD processing using f32_data
                                 // TODO: If speech detected, save segment using task_info.task_dir
+
+                                // --- Placeholder: Convert f32 to Vec<u8> (PCM L16) for STT ---
+                                // This is a simplified conversion. Real VAD would provide segments.
+                                // For now, let's assume f32_data is a segment ready for STT.
+                                let mut audio_data_bytes = Vec::with_capacity(f32_data.len() * 2);
+                                for &sample_f32 in &f32_data {
+                                    let sample_i16 = (sample_f32 * i16::MAX as f32) as i16;
+                                    audio_data_bytes.extend_from_slice(&sample_i16.to_le_bytes());
+                                }
+                                // --- End Placeholder Conversion ---
+
+                                if !audio_data_bytes.is_empty() {
+                                    debug!(task_id=%task_info.id, "Placeholder: Triggering STT for processed audio chunk ({} bytes).", audio_data_bytes.len());
+                                    let stt_app_state_clone = app_state.clone();
+                                    let stt_log_tx_clone = log_entry_tx.clone();
+                                    let stt_status_tx_clone = status_update_tx.clone();
+                                    let task_id_for_stt_log = task_info.id; // 克隆 task_id 以传递给 spawned 任务
+
+                                    // Spawn a new task for the STT request to avoid blocking the audio processor loop.
+                                    tokio::spawn(async move {
+                                        match process_stt_request(
+                                            stt_app_state_clone,
+                                            audio_data_bytes, // Pass Vec<u8>
+                                            &stt_log_tx_clone,    // Pass reference to cloned sender
+                                            &stt_status_tx_clone  // Pass reference to cloned sender
+                                        ).await {
+                                            Ok(transcript) => {
+                                                if !transcript.is_empty() {
+                                                    info!(task_id=%task_id_for_stt_log, "STT successful (called from audio_input_processor). Transcript length: {}", transcript.len());
+                                                    // Further processing of transcript (e.g., sending to LLM for auto-reply) would happen here or be queued.
+                                                } else {
+                                                    info!(task_id=%task_id_for_stt_log, "STT successful (called from audio_input_processor) but returned empty transcript.");
+                                                }
+                                            }
+                                            Err(e) => {
+                                                error!(task_id=%task_id_for_stt_log, "Error calling process_stt_request from audio_input_processor: {:?}", e);
+                                                // Error is already logged and status pushed by process_stt_request itself.
+                                            }
+                                        }
+                                    });
+                                }
                                 // TODO: If segment complete, potentially trigger STT (consider task_info.is_simulation?)
-                                // Example placeholder:
-                                // if !task_info.is_simulation {
-                                //     // Perform actions only relevant for real tasks
-                                // }
                             } else {
-                                // --- No active task: Skip processing ---
+                                // --- No active task: Skip processing ---\
                                 trace!("No active task, skipping audio data processing (size: {}).", f32_data.len());
                             }
                         }

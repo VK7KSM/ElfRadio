@@ -22,6 +22,7 @@ sqlx = { workspace = true }
 cpal = "0.15.3"
 elfradio_db = { workspace = true }
 rubato = "0.16.2"
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 
 [dev-dependencies]
 tokio = { workspace = true }
@@ -33,3 +34,4 @@ chrono = { workspace = true }
 assert_matches = "1.5"
 async-trait = { workspace = true }
 tempfile = "3.19.1"
+httpmock = "0.7.0"

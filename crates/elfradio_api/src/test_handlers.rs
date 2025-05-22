@@ -11,7 +11,6 @@ use serde_json::json; // Ensure serde_json::json macro is imported
 use elfradio_core::AppState;
 use elfradio_types::{
     AiError as ElfAiError,
-    AuxServiceClient,
     TestTtsRequest,
     TestSttRequest,
 };
@@ -99,11 +98,6 @@ pub async fn test_tts_handler(
 }
 
 /// Handler for testing Speech-to-Text functionality.
-#[derive(serde::Serialize)] // Add Serialize for the response struct
-struct TestSttResponse {
-    transcribed_text: String,
-}
-
 pub async fn test_stt_handler(
     State(app_state): State<Arc<AppState>>,
     Json(payload): Json<TestSttRequest>,

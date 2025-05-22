@@ -10,9 +10,11 @@ pub use tx_processor::{tx_queue_processor, queue_text_for_transmission};
 pub mod logging;
 // pub mod audio_input_handler; // Remove or comment out this incorrect line
 pub mod task_manager; // 添加新的 task_manager 模块声明
+pub mod network_monitor; // <--- 新增网络监控模块声明
 
 // 导出audio_processor中的函数，以便主应用程序可以使用
 pub use audio_processor::audio_input_processor; // 修正：使用正确的函数名
+pub use network_monitor::check_initial_network_connectivity; // <--- 新增导出
 
 // --- Necessary Imports (Cleaned) ---
 use std::sync::Arc;

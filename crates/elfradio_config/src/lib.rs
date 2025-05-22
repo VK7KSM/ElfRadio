@@ -8,6 +8,8 @@ use std::fs; // Ensure fs is imported
 use std::env; // ADDED for current_dir
 use serde_json::Value as JsonValue; // Added for input type
 use toml_edit::{DocumentMut, value as toml_value, Item}; // Added for TOML writing and Item
+use uuid::Uuid;
+use serde_json::json;
 
 #[derive(Error, Debug)]
 pub enum ConfigError {
@@ -36,6 +38,38 @@ fn get_app_config_path() -> Result<PathBuf, ConfigError> {
             // Map the IO error to our ConfigError::Io variant
             Err(ConfigError::IoError(e))
         }
+    }
+}
+
+/// 确保 config 中设置了有效的 user_uuid。
+/// 如果 user_uuid 为 None 或空字符串，则生成一个新的 UUID，
+/// 并尝试将其保存到配置文件中。
+fn ensure_user_uuid_is_set(config: &mut AppConfig) {
+    // 检查当前 user_uuid 是否为 None 或空字符串
+    let should_generate_new_uuid = match &config.user_uuid {
+        None => true,
+        Some(uuid) if uuid.trim().is_empty() => true,
+        _ => false,
+    };
+
+    if should_generate_new_uuid {
+        // 生成新的 UUID
+        let new_uuid = Uuid::new_v4().to_string();
+        info!("没有找到现有用户 UUID 或它为空。正在生成并保存新的用户 UUID: {}", new_uuid);
+
+        // 创建用于保存的 JSON 对象
+        let uuid_to_save = json!({
+            "user_uuid": new_uuid.clone()
+        });
+
+        // 尝试保存到配置文件
+        match save_user_config_values(uuid_to_save) {
+            Ok(_) => info!("成功保存新生成的用户 UUID 到配置文件"),
+            Err(e) => error!("无法将新生成的用户 UUID 保存到配置文件: {:?}", e),
+        }
+
+        // 无论保存是否成功，都更新当前会话中的 config 对象
+        config.user_uuid = Some(new_uuid);
     }
 }
 
@@ -101,7 +135,10 @@ pub fn load_config() -> Result<AppConfig, ConfigError> {
 
     debug!("Building and deserializing configuration...");
     let config_rs = builder.build()?;
-    let app_config = config_rs.try_deserialize::<AppConfig>()?;
+    let mut app_config = config_rs.try_deserialize::<AppConfig>()?;
+
+    // 确保 user_uuid 已设置，如果没有则生成新的
+    ensure_user_uuid_is_set(&mut app_config);
 
     info!("Configuration loaded successfully from app directory.");
     Ok(app_config)
