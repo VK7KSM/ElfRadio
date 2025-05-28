@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Tooltip,
@@ -11,6 +11,7 @@ import { SxProps, Theme } from '@mui/material/styles'; // 用于 SxProps 类型
 // import { SvgIconComponent } from '@mui/icons-material'; // 用于 NavItemIconProps
 
 import { useThemeStore } from '../lib/store/themeStore';
+import { useNavigate, useLocation } from 'react-router-dom';
 // import { useTaskStore } from '../lib/store/taskStore'; // 如果后续需要用于导航逻辑，则导入
 
 // 导入所有必要的 Material 图标（圆角变体）
@@ -25,8 +26,9 @@ import LockResetRounded from '@mui/icons-material/LockResetRounded';
 import DarkModeRounded from '@mui/icons-material/DarkModeRounded';
 import LightModeRounded from '@mui/icons-material/LightModeRounded';
 
-// Logo 路径的占位符 - 如果有实际导入，请替换
-const elfRadioLogoSvg = '/elfradio-logo-placeholder.svg'; // 或例如 import logo from '@/assets/images/logo.svg'
+// 导入亮色和暗色模式的侧边栏主 Logo
+import logoLight from '../assets/logo80.png';
+import logoDark from '../assets/logo80dark.png';
 
 // 更新：定义 SidebarColorScheme 接口
 interface SidebarColorScheme {
@@ -141,9 +143,13 @@ const NavItemIcon: React.FC<NavItemIconProps> = ({
 const Sidebar: React.FC = () => {
   const muiTheme = useTheme();
   const themeMode = useThemeStore((state) => state.mode);
+  // 根据当前主题模式选择合适的 Logo
+  const currentLogo = themeMode === 'light' ? logoLight : logoDark;
   const toggleTheme = useThemeStore((state) => state.toggleTheme);
+  const navigate = useNavigate();
+  const location = useLocation();
 
-  const [selectedItem, setSelectedItem] = useState<string>('system-settings');
+  const [selectedItem, setSelectedItem] = useState<string>('home');
 
   // 更新：定义 sidebarColors 常量，包含所有最终HEX颜色值
   const sidebarColors: { light: SidebarColorScheme; dark: SidebarColorScheme } = {
@@ -166,9 +172,9 @@ const Sidebar: React.FC = () => {
       outerSelectedBg: '#1C2527',
       innerDefaultFill: '#364A4F',
       innerDefaultBorder: '#B1CBD1',
-      innerHoverFill_Dark: '#364A4F', // 暗色模式悬停时保持纯色填充
+      innerHoverFill_Dark: '#364A4F',
       innerHoverBorder: '#E3E2E6',
-      innerSelectedFill_Dark: '#364A4F', // 暗色模式选中时保持纯色填充
+      innerSelectedFill_Dark: '#364A4F',
       innerSelectedBorder: '#E3E2E6',
       iconDefault: '#B1CBD1',
       iconHover: '#E3E2E6',
@@ -177,56 +183,79 @@ const Sidebar: React.FC = () => {
   };
   const currentColors = sidebarColors[themeMode];
 
-  const handleItemClick = (itemName: string) => {
-    setSelectedItem(itemName);
-    console.log(`Sidebar NavItem clicked: ${itemName}`);
-    // 在后续步骤中在此处添加导航逻辑
+  // 路由导航处理函数
+  const handleItemClick = (item: { name: string; path: string }) => {
+    setSelectedItem(item.name);
+    navigate(item.path);
+    console.log(`Sidebar NavItem clicked: ${item.name}, navigating to: ${item.path}`);
   };
 
-  // 确认图标顺序，"模拟呼叫练习"应为第一项
+  // 根据当前路径同步选中状态
+  useEffect(() => {
+    const currentPath = location.pathname;
+    const currentItem = navItems.find(item => item.path === currentPath);
+    if (currentItem) {
+      setSelectedItem(currentItem.name);
+    } else if (currentPath === '/home' || currentPath === '/') {
+      setSelectedItem('home');
+    }
+  }, [location.pathname]);
+
+  // 更新：添加路径属性到 navItems 数组
   const navItems = [
-    { name: 'simulated-qso', icon: <SmartToyRounded />, tooltip: '模拟呼叫练习' },
-    { name: 'general-call', icon: <CellTowerRounded />, tooltip: '普通呼叫任务' },
-    { name: 'emergency', icon: <SecurityRounded />, tooltip: '应急通信管理' },
-    { name: 'meshtastic', icon: <SettingsInputAntennaRounded />, tooltip: 'Meshtastic' },
-    { name: 'sdr-server', icon: <DnsRoundedIcon />, tooltip: 'SDR 服务器' },
-    { name: 'contacts', icon: <ContactEmergencyRounded />, tooltip: '通信录' },
-    { name: 'system-settings', icon: <SettingsRounded />, tooltip: '系统设置' },
-    { name: 'lock-screen', icon: <LockResetRounded />, tooltip: '锁屏' },
+    { name: 'simulated-qso', icon: <SmartToyRounded />, tooltip: '模拟呼叫练习', path: '/simulated-qso' },
+    { name: 'general-call', icon: <CellTowerRounded />, tooltip: '普通呼叫任务', path: '/general-call' },
+    { name: 'emergency', icon: <SecurityRounded />, tooltip: '应急通信管理', path: '/emergency' },
+    { name: 'meshtastic', icon: <SettingsInputAntennaRounded />, tooltip: 'Meshtastic', path: '/meshtastic' },
+    { name: 'sdr-server', icon: <DnsRoundedIcon />, tooltip: 'SDR 服务器', path: '/sdr-server' },
+    { name: 'contacts', icon: <ContactEmergencyRounded />, tooltip: '通信录', path: '/contacts' },
+    { name: 'system-settings', icon: <SettingsRounded />, tooltip: '系统设置', path: '/settings' },
+    { name: 'lock-screen', icon: <LockResetRounded />, tooltip: '锁屏', path: '/lock-screen' },
   ];
 
   return (
     <Box
-      sx={{ // sx 用于布局和其他非关键颜色样式
+      sx={{
         width: '90px',
-        height: '100vh', // 使用 100vh 以确保全高
+        height: '100vh',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        paddingTop: muiTheme.spacing(2), // 更新
-        paddingBottom: '140px', // 更新：为底部绝对定位的主题切换按钮预留空间
+        paddingTop: muiTheme.spacing(2),
+        paddingBottom: '140px',
         boxSizing: 'border-box',
         justifyContent: 'flex-start',
-        position: 'relative', // 为将来可能的绝对定位子元素做准备
-        overflow: 'hidden', // 隐藏任何可能溢出的内容
+        position: 'relative',
+        overflow: 'hidden',
       }}
-      style={{ // CRITICAL: 强制应用背景色以内联样式
+      style={{
         backgroundColor: currentColors.sidebarBg,
       }}
     >
-      {/* 首页/Logo 项 */}
+      {/* 首页/Logo 项 - 已更新尺寸、宽高比和悬停效果 */}
       <MuiIconButton
-        onClick={() => handleItemClick('home')}
+        onClick={() => handleItemClick({ name: 'home', path: '/home' })}
         sx={{
-          marginTop: muiTheme.spacing(1), // 更新
-          marginBottom: muiTheme.spacing(10.5), // 85px -> 200 - 16 - 8 - 60 - 16 - 15 = 85
-          width: '60px', 
-          height: '60px',
-          padding: '10px', 
+          marginTop: muiTheme.spacing(1.5),
+          marginBottom: muiTheme.spacing(3),
+          width: '55px',
+          height: '48px', // 适应 Logo 高度并提供少许垂直边距
+          padding: '0px',
+          backgroundColor: 'transparent',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          transition: muiTheme.transitions.create(['transform', 'background-color', 'box-shadow'], { 
+            duration: muiTheme.transitions.duration.shorter 
+          }),
+          '&:hover': {
+            backgroundColor: 'transparent',
+            boxShadow: 'none',
+            transform: 'scale(1.1)', // Logo 悬停放大效果
+          },
         }}
       >
-        {/* 替换为实际的 logo 导入和渲染 */}
-        <img src={elfRadioLogoSvg} alt="ElfRadio 首页" style={{ width: '40px', height: '40px' }} />
+        <img src={currentLogo} alt="ElfRadio 首页" style={{ width: '55px', height: 'auto', display: 'block' }} />
       </MuiIconButton>
 
       {/* 功能导航项容器 */}
@@ -236,9 +265,9 @@ const Sidebar: React.FC = () => {
           flexDirection: 'column',
           alignItems: 'center',
           width: '100%',
-          flexGrow: 1, // 更新：使其占据Logo和底部预留空间之间的区域
-          overflow: 'hidden', // 关键：裁剪超出此区域的功能图标
-          marginTop: muiTheme.spacing(2), // 与Logo的间距
+          flexGrow: 1,
+          overflow: 'hidden',
+          marginTop: muiTheme.spacing(2),
         }}
       >
         {navItems.map((item) => (
@@ -247,17 +276,17 @@ const Sidebar: React.FC = () => {
             icon={item.icon}
             tooltipTitle={item.tooltip}
             isSelected={selectedItem === item.name}
-            onClick={() => handleItemClick(item.name)}
+            onClick={() => handleItemClick(item)}
             currentColors={currentColors}
           />
         ))}
       </Box>
 
-      {/* 主题切换项 - 更新为绝对定位的圆形按钮 */}
+      {/* 主题切换项 */}
       <Box 
         sx={{ 
           position: 'absolute',
-          bottom: muiTheme.spacing(2), // 距离 Sidebar 底部 16px
+          bottom: muiTheme.spacing(2),
           left: '50%',
           transform: 'translateX(-50%)',
         }}
@@ -268,20 +297,19 @@ const Sidebar: React.FC = () => {
             sx={{
               width: '48px',
               height: '48px',
-              padding: '12px', // 使图标在按钮内居中
-              borderRadius: '50%', // 圆形
-              backgroundColor: currentColors.innerDefaultFill, // 与其他导航项默认填充一致
-              border: `1.5px solid ${currentColors.innerDefaultBorder}`, // 与其他导航项默认边框一致
+              padding: '12px',
+              borderRadius: '50%',
+              backgroundColor: currentColors.innerDefaultFill,
+              border: `1.5px solid ${currentColors.innerDefaultBorder}`,
               transition: muiTheme.transitions.create(['background-color', 'border-color', 'transform', 'color'], { 
                 duration: muiTheme.transitions.duration.short, 
               }),
               '&:hover': {
-                backgroundColor: currentColors.innerDefaultFill, // 悬停时背景可保持或改变
-                borderColor: currentColors.innerHoverBorder, // 使用定义的悬停边框色
+                backgroundColor: currentColors.innerDefaultFill,
+                borderColor: currentColors.innerHoverBorder,
                 transform: 'scale(1.1)',
-                // 直接为图标SVG元素设置颜色，因为MuiIconButton的color prop可能不直接影响SVG子元素
                 '& .MuiSvgIcon-root': { 
-                  color: currentColors.iconHover, // 使用定义的悬停图标色
+                  color: currentColors.iconHover,
                 },
               },
             }}

@@ -1,5 +1,6 @@
 import React, { StrictMode, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
+import { BrowserRouter } from 'react-router-dom'
 import './index.css'
 import App from './App'
 
@@ -61,10 +62,12 @@ const MainWrapper: React.FC = () => {
                      // 这个 effect 会在挂载时运行一次，并在卸载时清理。
 
   return (
-    <ThemeProvider theme={activeTheme}>
-      <CssBaseline />
-      <App />
-    </ThemeProvider>
+    <BrowserRouter>
+      <ThemeProvider theme={activeTheme}>
+        <CssBaseline />
+        <App />
+      </ThemeProvider>
+    </BrowserRouter>
   )
 }
 
